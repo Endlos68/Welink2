@@ -1,0 +1,552 @@
+<!DOCTYPE html>
+<html lang="de">
+
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Lead Dashboard — Quellen-Tracking</title>
+    <link rel="icon" type="image/x-icon" href="assets/images/favicon.png">
+    <style>
+        :root {
+            --bg: #0d0d0f;
+            --panel: #16161a;
+            --panel-2: #1d1d22;
+            --border: #2a2a31;
+            --text: #f2f2f4;
+            --muted: #9a9aa5;
+            --accent: #ff5e3a;
+            --accent-2: #5b7cff;
+            --green: #38d39f;
+            --yellow: #ffce4f;
+            --red: #ff5e6c;
+            --shop: #5b7cff;
+            --service: #38d39f;
+            --radius: 14px;
+            --shadow: 0 10px 30px rgba(0, 0, 0, .45);
+        }
+
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+
+        body {
+            background: radial-gradient(1200px 600px at 80% -10%, #1a1a22 0%, var(--bg) 55%);
+            color: var(--text);
+            font-family: 'Inter', system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif;
+            min-height: 100vh;
+            padding: 28px 18px 80px;
+            -webkit-font-smoothing: antialiased;
+        }
+
+        .wrap { max-width: 1180px; margin: 0 auto; }
+
+        header.top {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            flex-wrap: wrap;
+            gap: 16px;
+            margin-bottom: 26px;
+        }
+
+        .brand { display: flex; align-items: center; gap: 14px; }
+        .brand .logo {
+            width: 46px; height: 46px; border-radius: 12px;
+            background: linear-gradient(135deg, var(--accent), #ff9a3a);
+            display: grid; place-items: center; font-weight: 800; font-size: 22px;
+            box-shadow: var(--shadow);
+        }
+        .brand h1 { font-size: 22px; letter-spacing: -.4px; }
+        .brand p { color: var(--muted); font-size: 13px; margin-top: 2px; }
+
+        .top-actions { display: flex; gap: 10px; flex-wrap: wrap; }
+
+        button, .btn {
+            font: inherit; cursor: pointer; border: 1px solid var(--border);
+            background: var(--panel-2); color: var(--text);
+            padding: 10px 16px; border-radius: 10px; transition: .15s; font-weight: 600;
+        }
+        button:hover, .btn:hover { border-color: #3c3c47; transform: translateY(-1px); }
+        button.primary { background: linear-gradient(135deg, var(--accent), #ff8a3a); border: none; color: #fff; }
+        button.ghost { background: transparent; }
+        button.danger { color: var(--red); }
+        button.small { padding: 6px 10px; font-size: 12px; }
+
+        /* Tabs */
+        .tabs { display: flex; gap: 8px; background: var(--panel); padding: 6px; border-radius: 12px; width: fit-content; border: 1px solid var(--border); margin-bottom: 24px; }
+        .tab {
+            padding: 10px 22px; border-radius: 8px; border: none; background: transparent;
+            color: var(--muted); font-weight: 700; display: flex; align-items: center; gap: 8px;
+        }
+        .tab .dot { width: 9px; height: 9px; border-radius: 50%; }
+        .tab[data-seg="shop"] .dot { background: var(--shop); }
+        .tab[data-seg="service"] .dot { background: var(--service); }
+        .tab.active { background: var(--panel-2); color: var(--text); }
+
+        /* KPI cards */
+        .kpis { display: grid; grid-template-columns: repeat(4, 1fr); gap: 14px; margin-bottom: 22px; }
+        .kpi { background: var(--panel); border: 1px solid var(--border); border-radius: var(--radius); padding: 18px; }
+        .kpi .label { color: var(--muted); font-size: 12px; text-transform: uppercase; letter-spacing: .6px; }
+        .kpi .value { font-size: 28px; font-weight: 800; margin-top: 8px; letter-spacing: -.5px; }
+        .kpi .sub { color: var(--muted); font-size: 12px; margin-top: 4px; }
+
+        .grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 18px; margin-bottom: 22px; }
+
+        .card { background: var(--panel); border: 1px solid var(--border); border-radius: var(--radius); padding: 20px; }
+        .card h3 { font-size: 15px; margin-bottom: 4px; }
+        .card .hint { color: var(--muted); font-size: 12px; margin-bottom: 16px; }
+
+        /* Bar chart */
+        .bars { display: flex; flex-direction: column; gap: 12px; }
+        .bar-row { display: grid; grid-template-columns: 130px 1fr 90px; align-items: center; gap: 12px; }
+        .bar-row .name { font-size: 13px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+        .bar-track { background: var(--panel-2); height: 22px; border-radius: 6px; overflow: hidden; }
+        .bar-fill { height: 100%; border-radius: 6px; transition: width .5s ease; min-width: 2px; }
+        .bar-row .num { text-align: right; font-size: 13px; color: var(--muted); font-variant-numeric: tabular-nums; }
+        .empty { color: var(--muted); font-size: 13px; text-align: center; padding: 30px 0; }
+
+        /* Form */
+        .form-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; }
+        .field { display: flex; flex-direction: column; gap: 6px; }
+        .field.full { grid-column: 1 / -1; }
+        .field label { font-size: 12px; color: var(--muted); font-weight: 600; }
+        input, select, textarea {
+            font: inherit; background: var(--panel-2); border: 1px solid var(--border);
+            color: var(--text); padding: 10px 12px; border-radius: 9px; width: 100%;
+        }
+        input:focus, select:focus, textarea:focus { outline: none; border-color: var(--accent-2); }
+        textarea { resize: vertical; min-height: 44px; }
+        .form-actions { display: flex; gap: 10px; margin-top: 16px; }
+
+        /* Table */
+        .table-tools { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; margin-bottom: 14px; }
+        .table-tools input, .table-tools select { width: auto; min-width: 150px; }
+        .table-tools .spacer { flex: 1; }
+        .table-scroll { overflow-x: auto; }
+        table { width: 100%; border-collapse: collapse; font-size: 13px; }
+        th, td { padding: 11px 12px; text-align: left; border-bottom: 1px solid var(--border); white-space: nowrap; }
+        th { color: var(--muted); font-size: 11px; text-transform: uppercase; letter-spacing: .5px; cursor: pointer; user-select: none; }
+        th:hover { color: var(--text); }
+        tbody tr:hover { background: var(--panel-2); }
+        td .pill { padding: 3px 10px; border-radius: 20px; font-size: 11px; font-weight: 700; display: inline-block; }
+        .src-pill { background: rgba(91,124,255,.15); color: #9db0ff; }
+        .status { font-weight: 700; }
+        .status.neu { color: var(--yellow); }
+        .status.kontaktiert { color: var(--accent-2); }
+        .status.gewonnen { color: var(--green); }
+        .status.verloren { color: var(--red); }
+        .row-del { color: var(--muted); border: none; background: transparent; padding: 4px 8px; }
+        .row-del:hover { color: var(--red); }
+
+        .section-title { font-size: 16px; font-weight: 700; margin: 8px 0 16px; display: flex; align-items: center; gap: 10px; }
+
+        footer { text-align: center; color: var(--muted); font-size: 12px; margin-top: 40px; }
+
+        @media (max-width: 900px) {
+            .kpis { grid-template-columns: 1fr 1fr; }
+            .grid-2 { grid-template-columns: 1fr; }
+            .form-grid { grid-template-columns: 1fr 1fr; }
+            .bar-row { grid-template-columns: 100px 1fr 70px; }
+        }
+        @media (max-width: 560px) {
+            .form-grid { grid-template-columns: 1fr; }
+            .kpis { grid-template-columns: 1fr 1fr; }
+        }
+    </style>
+</head>
+
+<body>
+    <div class="wrap">
+        <header class="top">
+            <div class="brand">
+                <div class="logo">L</div>
+                <div>
+                    <h1>Lead Dashboard</h1>
+                    <p>Dokumentiere woher deine Leads kommen — für bessere Google Ads &amp; Meta Kampagnen</p>
+                </div>
+            </div>
+            <div class="top-actions">
+                <button class="ghost" onclick="exportCSV()">⬇ CSV Export</button>
+                <label class="btn ghost" style="display:inline-flex;align-items:center;">
+                    ⬆ CSV Import
+                    <input type="file" accept=".csv" onchange="importCSV(event)" style="display:none">
+                </label>
+                <button class="ghost danger" onclick="clearSegment()">Alle löschen</button>
+            </div>
+        </header>
+
+        <div class="tabs" id="tabs">
+            <button class="tab active" data-seg="shop"><span class="dot"></span> E-Commerce Shop</button>
+            <button class="tab" data-seg="service"><span class="dot"></span> Dienstleistung</button>
+        </div>
+
+        <!-- KPIs -->
+        <div class="kpis" id="kpis"></div>
+
+        <!-- Charts -->
+        <div class="grid-2">
+            <div class="card">
+                <h3>Leads nach Quelle</h3>
+                <p class="hint">Wo kommen deine Anfragen her? (Anzahl Leads)</p>
+                <div class="bars" id="chartSource"></div>
+            </div>
+            <div class="card">
+                <h3>Umsatz / Wert nach Quelle</h3>
+                <p class="hint">Welche Quelle bringt das meiste Geld? (Summe €)</p>
+                <div class="bars" id="chartValue"></div>
+            </div>
+        </div>
+
+        <!-- Add form -->
+        <div class="card" style="margin-bottom:22px;">
+            <div class="section-title">➕ Neuen Lead erfassen — <span id="segLabel">E-Commerce Shop</span></div>
+            <form id="leadForm">
+                <div class="form-grid">
+                    <div class="field">
+                        <label>Datum</label>
+                        <input type="date" name="date" required>
+                    </div>
+                    <div class="field">
+                        <label>Quelle / Kanal</label>
+                        <select name="source" id="sourceSelect" required></select>
+                    </div>
+                    <div class="field">
+                        <label>Kampagne (optional)</label>
+                        <input type="text" name="campaign" placeholder="z.B. Summer-Sale, Retargeting">
+                    </div>
+                    <div class="field">
+                        <label>Medium / Detail</label>
+                        <input type="text" name="medium" placeholder="z.B. cpc, Story, Newsletter">
+                    </div>
+                    <div class="field">
+                        <label>Lead-Name / Kunde</label>
+                        <input type="text" name="name" placeholder="Name oder Bestellnr.">
+                    </div>
+                    <div class="field">
+                        <label>Wert / Umsatz (€)</label>
+                        <input type="number" name="value" step="0.01" min="0" placeholder="0.00">
+                    </div>
+                    <div class="field">
+                        <label>Kosten / Ad-Spend (€)</label>
+                        <input type="number" name="cost" step="0.01" min="0" placeholder="0.00">
+                    </div>
+                    <div class="field">
+                        <label>Status</label>
+                        <select name="status">
+                            <option value="neu">Neu</option>
+                            <option value="kontaktiert">Kontaktiert</option>
+                            <option value="gewonnen">Gewonnen</option>
+                            <option value="verloren">Verloren</option>
+                        </select>
+                    </div>
+                    <div class="field full">
+                        <label>Notiz (optional)</label>
+                        <textarea name="note" placeholder="Was war besonders? Welche Anzeige? Welches Keyword?"></textarea>
+                    </div>
+                </div>
+                <div class="form-actions">
+                    <button type="submit" class="primary">Lead speichern</button>
+                    <button type="reset" class="ghost">Zurücksetzen</button>
+                </div>
+            </form>
+        </div>
+
+        <!-- Table -->
+        <div class="card">
+            <div class="section-title">📋 Alle Leads</div>
+            <div class="table-tools">
+                <input type="search" id="search" placeholder="Suchen…">
+                <select id="filterSource"><option value="">Alle Quellen</option></select>
+                <select id="filterStatus">
+                    <option value="">Alle Status</option>
+                    <option value="neu">Neu</option>
+                    <option value="kontaktiert">Kontaktiert</option>
+                    <option value="gewonnen">Gewonnen</option>
+                    <option value="verloren">Verloren</option>
+                </select>
+                <div class="spacer"></div>
+                <span class="hint" id="rowCount"></span>
+            </div>
+            <div class="table-scroll">
+                <table id="leadTable">
+                    <thead>
+                        <tr>
+                            <th data-sort="date">Datum</th>
+                            <th data-sort="source">Quelle</th>
+                            <th data-sort="campaign">Kampagne</th>
+                            <th data-sort="name">Lead</th>
+                            <th data-sort="value">Wert €</th>
+                            <th data-sort="cost">Kosten €</th>
+                            <th data-sort="status">Status</th>
+                            <th>Notiz</th>
+                            <th></th>
+                        </tr>
+                    </thead>
+                    <tbody id="leadBody"></tbody>
+                </table>
+            </div>
+            <div class="empty" id="tableEmpty" style="display:none;">Noch keine Leads erfasst. Leg oben los! 🚀</div>
+        </div>
+
+        <footer>
+            Alle Daten werden ausschließlich lokal in deinem Browser gespeichert (localStorage). Kein Server, keine Cloud.<br>
+            Tipp: Mache regelmäßig einen CSV-Export als Backup.
+        </footer>
+    </div>
+
+    <script>
+        // ---------- Konfiguration ----------
+        const SOURCES = {
+            shop: ['Google Ads', 'Google Organic (SEO)', 'Meta Ads (Facebook)', 'Meta Ads (Instagram)',
+                'Instagram Organic', 'TikTok Ads', 'TikTok Organic', 'Pinterest', 'E-Mail / Newsletter',
+                'Influencer / Affiliate', 'Direkt / Bekannt', 'Preisvergleich (Idealo etc.)', 'Sonstiges'],
+            service: ['Google Ads', 'Google Organic (SEO)', 'Google My Business', 'Meta Ads (Facebook)',
+                'Meta Ads (Instagram)', 'Instagram Organic', 'LinkedIn', 'Empfehlung / Weiterempfehlung',
+                'Bestandskunde', 'E-Mail / Newsletter', 'Telefon / Kaltakquise', 'Messe / Event', 'Direkt', 'Sonstiges']
+        };
+        const SOURCE_COLORS = ['#5b7cff', '#38d39f', '#ff5e3a', '#ffce4f', '#c45bff', '#ff8a3a',
+            '#3ad1d1', '#ff5e6c', '#7bd938', '#5bb0ff', '#ff9ad1', '#9aa0ff', '#9a9aa5'];
+        const KEY = 'leadDashboard.v1';
+
+        // ---------- State ----------
+        let store = load();
+        let currentSeg = 'shop';
+        let sortKey = 'date', sortDir = -1;
+
+        function load() {
+            try { return JSON.parse(localStorage.getItem(KEY)) || { shop: [], service: [] }; }
+            catch (e) { return { shop: [], service: [] }; }
+        }
+        function save() { localStorage.setItem(KEY, JSON.stringify(store)); }
+
+        function fmtMoney(n) {
+            return (Number(n) || 0).toLocaleString('de-DE', { minimumFractionDigits: 0, maximumFractionDigits: 2 });
+        }
+        function fmtDate(d) {
+            if (!d) return '';
+            const p = d.split('-');
+            return p.length === 3 ? `${p[2]}.${p[1]}.${p[0]}` : d;
+        }
+        function esc(s) { return (s || '').replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c])); }
+
+        // ---------- Tabs ----------
+        document.getElementById('tabs').addEventListener('click', e => {
+            const t = e.target.closest('.tab'); if (!t) return;
+            currentSeg = t.dataset.seg;
+            document.querySelectorAll('.tab').forEach(x => x.classList.toggle('active', x === t));
+            document.getElementById('segLabel').textContent = currentSeg === 'shop' ? 'E-Commerce Shop' : 'Dienstleistung';
+            buildSourceOptions();
+            render();
+        });
+
+        function buildSourceOptions() {
+            const sel = document.getElementById('sourceSelect');
+            const filt = document.getElementById('filterSource');
+            sel.innerHTML = SOURCES[currentSeg].map(s => `<option>${s}</option>`).join('');
+            filt.innerHTML = '<option value="">Alle Quellen</option>' + SOURCES[currentSeg].map(s => `<option>${s}</option>`).join('');
+        }
+
+        // ---------- Form ----------
+        document.getElementById('leadForm').addEventListener('submit', e => {
+            e.preventDefault();
+            const f = e.target;
+            const lead = {
+                id: Date.now() + '-' + Math.random().toString(36).slice(2, 7),
+                date: f.date.value,
+                source: f.source.value,
+                campaign: f.campaign.value.trim(),
+                medium: f.medium.value.trim(),
+                name: f.name.value.trim(),
+                value: parseFloat(f.value.value) || 0,
+                cost: parseFloat(f.cost.value) || 0,
+                status: f.status.value,
+                note: f.note.value.trim()
+            };
+            store[currentSeg].push(lead);
+            save();
+            f.reset();
+            f.date.value = new Date().toISOString().slice(0, 10);
+            render();
+        });
+
+        // ---------- Table interactions ----------
+        document.getElementById('search').addEventListener('input', renderTable);
+        document.getElementById('filterSource').addEventListener('change', renderTable);
+        document.getElementById('filterStatus').addEventListener('change', renderTable);
+        document.querySelectorAll('#leadTable th[data-sort]').forEach(th => {
+            th.addEventListener('click', () => {
+                const k = th.dataset.sort;
+                if (sortKey === k) sortDir *= -1; else { sortKey = k; sortDir = 1; }
+                renderTable();
+            });
+        });
+
+        function deleteLead(id) {
+            if (!confirm('Diesen Lead wirklich löschen?')) return;
+            store[currentSeg] = store[currentSeg].filter(l => l.id !== id);
+            save(); render();
+        }
+
+        function clearSegment() {
+            const label = currentSeg === 'shop' ? 'E-Commerce Shop' : 'Dienstleistung';
+            if (!confirm(`Wirklich ALLE Leads im Bereich "${label}" löschen?`)) return;
+            store[currentSeg] = []; save(); render();
+        }
+
+        // ---------- Rendering ----------
+        function render() { renderKPIs(); renderCharts(); renderTable(); }
+
+        function renderKPIs() {
+            const data = store[currentSeg];
+            const total = data.length;
+            const won = data.filter(l => l.status === 'gewonnen').length;
+            const revenue = data.reduce((s, l) => s + (l.value || 0), 0);
+            const spend = data.reduce((s, l) => s + (l.cost || 0), 0);
+            const cr = total ? Math.round(won / total * 100) : 0;
+            const roas = spend > 0 ? (revenue / spend).toFixed(2) : '–';
+            const cpl = total > 0 && spend > 0 ? fmtMoney(spend / total) : '–';
+            document.getElementById('kpis').innerHTML = `
+                <div class="kpi"><div class="label">Leads gesamt</div><div class="value">${total}</div><div class="sub">${won} gewonnen · ${cr}% Conversion</div></div>
+                <div class="kpi"><div class="label">Umsatz / Wert</div><div class="value">${fmtMoney(revenue)} €</div><div class="sub">⌀ ${total ? fmtMoney(revenue / total) : 0} € pro Lead</div></div>
+                <div class="kpi"><div class="label">Ad-Spend</div><div class="value">${fmtMoney(spend)} €</div><div class="sub">⌀ ${cpl} € Kosten / Lead (CPL)</div></div>
+                <div class="kpi"><div class="label">ROAS</div><div class="value">${roas}${roas !== '–' ? '×' : ''}</div><div class="sub">Umsatz pro € Werbekosten</div></div>`;
+        }
+
+        function aggregate(field) {
+            const map = {};
+            store[currentSeg].forEach(l => {
+                const k = l.source || 'Unbekannt';
+                map[k] = (map[k] || 0) + (field === 'count' ? 1 : (l[field] || 0));
+            });
+            return Object.entries(map).sort((a, b) => b[1] - a[1]);
+        }
+
+        function colorFor(source) {
+            const idx = SOURCES[currentSeg].indexOf(source);
+            return SOURCE_COLORS[(idx >= 0 ? idx : 12) % SOURCE_COLORS.length];
+        }
+
+        function renderBars(elId, entries, isMoney) {
+            const el = document.getElementById(elId);
+            if (!entries.length) { el.innerHTML = '<div class="empty">Noch keine Daten</div>'; return; }
+            const max = Math.max(...entries.map(e => e[1])) || 1;
+            el.innerHTML = entries.map(([name, val]) => `
+                <div class="bar-row">
+                    <span class="name" title="${esc(name)}">${esc(name)}</span>
+                    <div class="bar-track"><div class="bar-fill" style="width:${Math.max(2, val / max * 100)}%;background:${colorFor(name)}"></div></div>
+                    <span class="num">${isMoney ? fmtMoney(val) + ' €' : val}</span>
+                </div>`).join('');
+        }
+
+        function renderCharts() {
+            renderBars('chartSource', aggregate('count'), false);
+            renderBars('chartValue', aggregate('value').filter(e => e[1] > 0), true);
+        }
+
+        function renderTable() {
+            const tbody = document.getElementById('leadBody');
+            const q = document.getElementById('search').value.toLowerCase();
+            const fs = document.getElementById('filterSource').value;
+            const fst = document.getElementById('filterStatus').value;
+            let rows = store[currentSeg].filter(l => {
+                if (fs && l.source !== fs) return false;
+                if (fst && l.status !== fst) return false;
+                if (q) {
+                    const hay = [l.source, l.campaign, l.medium, l.name, l.note].join(' ').toLowerCase();
+                    if (!hay.includes(q)) return false;
+                }
+                return true;
+            });
+            rows.sort((a, b) => {
+                let x = a[sortKey], y = b[sortKey];
+                if (sortKey === 'value' || sortKey === 'cost') { x = +x || 0; y = +y || 0; }
+                else { x = (x || '').toString().toLowerCase(); y = (y || '').toString().toLowerCase(); }
+                return x < y ? -sortDir : x > y ? sortDir : 0;
+            });
+
+            document.getElementById('tableEmpty').style.display = rows.length ? 'none' : 'block';
+            document.getElementById('rowCount').textContent = `${rows.length} von ${store[currentSeg].length} Leads`;
+
+            tbody.innerHTML = rows.map(l => `
+                <tr>
+                    <td>${fmtDate(l.date)}</td>
+                    <td><span class="pill src-pill">${esc(l.source)}</span></td>
+                    <td>${esc(l.campaign) || '<span style="color:var(--muted)">–</span>'}${l.medium ? `<br><small style="color:var(--muted)">${esc(l.medium)}</small>` : ''}</td>
+                    <td>${esc(l.name) || '<span style="color:var(--muted)">–</span>'}</td>
+                    <td style="font-variant-numeric:tabular-nums">${l.value ? fmtMoney(l.value) : '–'}</td>
+                    <td style="font-variant-numeric:tabular-nums">${l.cost ? fmtMoney(l.cost) : '–'}</td>
+                    <td><span class="status ${l.status}">${l.status.charAt(0).toUpperCase() + l.status.slice(1)}</span></td>
+                    <td title="${esc(l.note)}" style="max-width:200px;overflow:hidden;text-overflow:ellipsis;">${esc(l.note) || '<span style="color:var(--muted)">–</span>'}</td>
+                    <td><button class="row-del" onclick="deleteLead('${l.id}')" title="Löschen">✕</button></td>
+                </tr>`).join('');
+        }
+
+        // ---------- CSV ----------
+        const CSV_COLS = ['date', 'source', 'campaign', 'medium', 'name', 'value', 'cost', 'status', 'note'];
+        function csvCell(v) { v = (v ?? '').toString(); return /[",\n;]/.test(v) ? '"' + v.replace(/"/g, '""') + '"' : v; }
+
+        function exportCSV() {
+            const data = store[currentSeg];
+            const header = CSV_COLS.join(';');
+            const lines = data.map(l => CSV_COLS.map(c => csvCell(l[c])).join(';'));
+            const csv = '﻿' + [header, ...lines].join('\n');
+            const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+            const a = document.createElement('a');
+            a.href = URL.createObjectURL(blob);
+            a.download = `leads-${currentSeg}-${new Date().toISOString().slice(0, 10)}.csv`;
+            a.click();
+        }
+
+        function importCSV(ev) {
+            const file = ev.target.files[0]; if (!file) return;
+            const reader = new FileReader();
+            reader.onload = () => {
+                const text = reader.result.replace(/^﻿/, '');
+                const rows = text.split(/\r?\n/).filter(r => r.trim());
+                if (rows.length < 2) { alert('Keine Daten gefunden.'); return; }
+                const headers = rows[0].split(';').map(h => h.trim());
+                let added = 0;
+                for (let i = 1; i < rows.length; i++) {
+                    const cells = parseCsvLine(rows[i]);
+                    const obj = {};
+                    headers.forEach((h, idx) => obj[h] = cells[idx] || '');
+                    if (!obj.source && !obj.date) continue;
+                    store[currentSeg].push({
+                        id: Date.now() + '-' + Math.random().toString(36).slice(2, 7),
+                        date: obj.date || '', source: obj.source || 'Sonstiges',
+                        campaign: obj.campaign || '', medium: obj.medium || '', name: obj.name || '',
+                        value: parseFloat(obj.value) || 0, cost: parseFloat(obj.cost) || 0,
+                        status: ['neu', 'kontaktiert', 'gewonnen', 'verloren'].includes(obj.status) ? obj.status : 'neu',
+                        note: obj.note || ''
+                    });
+                    added++;
+                }
+                save(); render();
+                alert(`${added} Leads importiert.`);
+                ev.target.value = '';
+            };
+            reader.readAsText(file);
+        }
+        function parseCsvLine(line) {
+            const out = []; let cur = '', inQ = false;
+            for (let i = 0; i < line.length; i++) {
+                const ch = line[i];
+                if (inQ) {
+                    if (ch === '"' && line[i + 1] === '"') { cur += '"'; i++; }
+                    else if (ch === '"') inQ = false;
+                    else cur += ch;
+                } else {
+                    if (ch === '"') inQ = true;
+                    else if (ch === ';') { out.push(cur); cur = ''; }
+                    else cur += ch;
+                }
+            }
+            out.push(cur); return out;
+        }
+
+        // ---------- Init ----------
+        document.querySelector('input[name=date]').value = new Date().toISOString().slice(0, 10);
+        buildSourceOptions();
+        render();
+    </script>
+</body>
+
+</html>
