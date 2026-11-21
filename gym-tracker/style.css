@@ -115,9 +115,70 @@ input::placeholder { color: var(--text-dim); }
 
 /* ---------- Training: Übungskarten ---------- */
 .ex-card { margin-top: 12px; }
-.ex-card-head { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; }
-.ex-card-head h3 { font-size: 1rem; font-weight: 700; }
-.ex-card-summary { font-size: 0.78rem; color: var(--text-dim); white-space: nowrap; }
+.ex-card-head { display: flex; align-items: center; gap: 12px; }
+.ex-card-titles { flex: 1; min-width: 0; }
+.ex-card-head h3 { font-size: 1rem; font-weight: 700; overflow-wrap: anywhere; }
+.ex-card-summary { font-size: 0.78rem; color: var(--text-dim); margin-top: 2px; }
+
+/* ---------- Gerätefotos ---------- */
+.ex-thumb {
+  width: 56px;
+  height: 56px;
+  flex-shrink: 0;
+  border-radius: 12px;
+  overflow: hidden;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+}
+.ex-thumb img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.ex-thumb.empty { border-style: dashed; font-size: 1.3rem; opacity: 0.55; }
+button.ex-thumb.empty:active { opacity: 1; background: var(--bg-elev2); }
+
+.detail-photo { margin-top: 12px; }
+.detail-photo-frame {
+  display: block;
+  width: 100%;
+  aspect-ratio: 4 / 3;
+  border-radius: 12px;
+  overflow: hidden;
+  background: #000;
+  border: 1px solid var(--border);
+  padding: 0;
+}
+.detail-photo-frame img { width: 100%; height: 100%; object-fit: contain; display: block; }
+.detail-photo-empty {
+  border: 1px dashed var(--border);
+  border-radius: 12px;
+  background: var(--bg);
+  text-align: center;
+  color: var(--text-dim);
+  font-size: 0.85rem;
+  padding: 22px 16px;
+}
+.detail-photo-empty .big { font-size: 1.6rem; display: block; margin-bottom: 6px; }
+.detail-photo-actions { display: flex; gap: 8px; margin-top: 10px; }
+.detail-photo-actions .btn-ghost { flex: 1; min-width: 0; font-size: 0.88rem; padding: 10px 8px; }
+.detail-photo-actions .icon-btn { min-height: 44px; min-width: 44px; flex-shrink: 0; }
+
+.lightbox {
+  position: fixed;
+  inset: 0;
+  z-index: 50;
+  background: rgba(0, 0, 0, 0.97);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: calc(16px + env(safe-area-inset-top)) 12px calc(16px + env(safe-area-inset-bottom));
+}
+.lightbox img { max-width: 100%; max-height: calc(100% - 3em); object-fit: contain; border-radius: 8px; }
+.lightbox-caption { margin-top: 12px; font-weight: 700; text-align: center; }
+.lightbox-close { position: absolute; top: calc(12px + env(safe-area-inset-top)); right: 12px; }
+body.no-scroll { overflow: hidden; }
 
 .set-list { margin-top: 10px; display: flex; flex-direction: column; gap: 6px; }
 .set-row {
@@ -162,6 +223,8 @@ input::placeholder { color: var(--text-dim); }
   text-align: left;
 }
 .exercise-item:active { background: var(--bg-elev2); }
+.exercise-item .ex-thumb { width: 48px; height: 48px; border-radius: 10px; }
+.exercise-item-text { flex: 1; min-width: 0; }
 .exercise-item .name { font-weight: 700; }
 .exercise-item .meta { font-size: 0.78rem; color: var(--text-dim); margin-top: 2px; }
 .exercise-item .chev { color: var(--text-dim); font-size: 1.3rem; }

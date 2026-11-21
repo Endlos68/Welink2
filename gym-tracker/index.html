@@ -56,6 +56,7 @@
             <button class="icon-btn danger" id="detail-delete" aria-label="Löschen">&#x1F5D1;</button>
           </div>
         </div>
+        <div class="detail-photo" id="detail-photo"></div>
         <div class="metric-toggle" id="detail-metric-toggle"></div>
         <div class="chart-wrap">
           <canvas id="detail-chart"></canvas>
@@ -82,7 +83,7 @@
       <div class="stat-grid" id="stats-numbers"></div>
       <div class="card">
         <h2 class="card-title">Daten</h2>
-        <p class="card-sub">Alle Daten liegen nur lokal auf diesem Gerät (Browser-Speicher).</p>
+        <p class="card-sub">Alle Daten liegen nur lokal auf diesem Gerät (Browser-Speicher). Das Backup enthält auch die Gerätefotos.</p>
         <div class="row-form">
           <button class="btn-ghost" id="data-export">Backup exportieren</button>
           <button class="btn-ghost" id="data-import">Backup importieren</button>
@@ -104,6 +105,16 @@
       <span class="tab-icon">&#x1F4C8;</span><span>Statistik</span>
     </button>
   </nav>
+
+  <!-- Foto-Auswahl (Kamera oder Galerie), wird per JS ausgelöst -->
+  <input type="file" id="photo-input" accept="image/*" hidden>
+
+  <!-- Vollbild-Ansicht für Gerätefotos -->
+  <div class="lightbox" id="lightbox" hidden role="dialog" aria-modal="true" aria-label="Foto">
+    <button class="icon-btn lightbox-close" id="lightbox-close" aria-label="Schließen">&#x2715;</button>
+    <img id="lightbox-img" alt="">
+    <div class="lightbox-caption" id="lightbox-caption"></div>
+  </div>
 
   <script src="app.js"></script>
 </body>

@@ -37,6 +37,188 @@
     return null;
   }
 
+  /* ================= Fotos (IndexedDB) =================
+     Gerätefotos sind zu groß für localStorage (~5 MB Limit) und würden jeden
+     Speichervorgang ausbremsen. Sie liegen daher als verkleinerte JPEG-Data-URLs
+     in IndexedDB (Schlüssel = Übungs-ID) und zusätzlich im Speicher (photos). */
+
+  var PHOTO_MAX_SIZE = 1280;   // längste Kante in px
+  var PHOTO_QUALITY = 0.8;
+
+  var photos = {};             // exId -> data:image/jpeg;base64,...
+
+  var PhotoStore = (function () {
+    var DB_NAME = 'gym-tracker-photos';
+    var STORE = 'photos';
+    var dbPromise = null;
+
+    function open() {
+      if (!dbPromise) {
+        dbPromise = new Promise(function (resolve, reject) {
+          if (!window.indexedDB) { reject(new Error('IndexedDB nicht verfügbar')); return; }
+          var req = indexedDB.open(DB_NAME, 1);
+          req.onupgradeneeded = function () { req.result.createObjectStore(STORE); };
+          req.onsuccess = function () { resolve(req.result); };
+          req.onerror = function () { reject(req.error); };
+        });
+        dbPromise.catch(function () { dbPromise = null; });
+      }
+      return dbPromise;
+    }
+
+    /* Führt fn(store) in einer Transaktion aus; resolved nach Abschluss mit
+       dem Ergebnis des (optional) zurückgegebenen Requests. */
+    function run(mode, fn) {
+      return open().then(function (db) {
+        return new Promise(function (resolve, reject) {
+          var tx = db.transaction(STORE, mode);
+          var req = fn(tx.objectStore(STORE));
+          tx.oncomplete = function () { resolve(req ? req.result : undefined); };
+          tx.onerror = function () { reject(tx.error); };
+          tx.onabort = function () { reject(tx.error); };
+        });
+      });
+    }
+
+    return {
+      put: function (id, dataUrl) { return run('readwrite', function (s) { return s.put(dataUrl, id); }); },
+      remove: function (id) { return run('readwrite', function (s) { return s.delete(id); }); },
+      getAll: function () {
+        var out = {};
+        return run('readonly', function (s) {
+          var cur = s.openCursor();
+          cur.onsuccess = function () {
+            var c = cur.result;
+            if (c) { out[c.key] = c.value; c.continue(); }
+          };
+        }).then(function () { return out; });
+      },
+      replaceAll: function (map) {
+        return run('readwrite', function (s) {
+          s.clear();
+          Object.keys(map).forEach(function (id) { s.put(map[id], id); });
+        });
+      }
+    };
+  })();
+
+  function isPhotoDataUrl(v) {
+    return typeof v === 'string' && /^data:image\/(jpeg|png|webp);base64,/.test(v);
+  }
+
+  function loadPhotos() {
+    return PhotoStore.getAll().then(function (all) {
+      photos = {};
+      Object.keys(all).forEach(function (id) {
+        if (isPhotoDataUrl(all[id])) photos[id] = all[id];
+      });
+    }).catch(function () { /* ohne IndexedDB: App läuft ohne Fotos weiter */ });
+  }
+
+  /* Bild laden, auf PHOTO_MAX_SIZE verkleinern und als JPEG-Data-URL liefern.
+     Moderne Browser berücksichtigen dabei die EXIF-Ausrichtung automatisch. */
+  function resizeImage(file) {
+    return new Promise(function (resolve, reject) {
+      var url = URL.createObjectURL(file);
+      var img = new Image();
+      img.onload = function () {
+        var w = img.naturalWidth, h = img.naturalHeight;
+        var scale = Math.min(1, PHOTO_MAX_SIZE / Math.max(w, h));
+        var canvas = document.createElement('canvas');
+        canvas.width = Math.max(1, Math.round(w * scale));
+        canvas.height = Math.max(1, Math.round(h * scale));
+        var ctx = canvas.getContext('2d');
+        ctx.fillStyle = '#000';      // transparente PNGs nicht schwarz-auf-schwarz
+        ctx.fillRect(0, 0, canvas.width, canvas.height);
+        ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+        URL.revokeObjectURL(url);
+        resolve(canvas.toDataURL('image/jpeg', PHOTO_QUALITY));
+      };
+      img.onerror = function () {
+        URL.revokeObjectURL(url);
+        reject(new Error('Bild konnte nicht gelesen werden'));
+      };
+      img.src = url;
+    });
+  }
+
+  function setPhoto(exId, dataUrl) {
+    return PhotoStore.put(exId, dataUrl).then(function () {
+      photos[exId] = dataUrl;
+      // Browser bitten, den Speicher nicht automatisch zu leeren
+      if (navigator.storage && navigator.storage.persist) navigator.storage.persist().catch(function () {});
+    });
+  }
+
+  function removePhoto(exId) {
+    delete photos[exId];
+    return PhotoStore.remove(exId).catch(function () {});
+  }
+
+  /* Öffnet Kamera (useCamera) oder Galerie und speichert das Foto zur Übung. */
+  var photoTarget = null;
+  var photoInput = $('photo-input');
+
+  function pickPhoto(exId, useCamera) {
+    photoTarget = exId;
+    if (useCamera) photoInput.setAttribute('capture', 'environment');
+    else photoInput.removeAttribute('capture');
+    photoInput.click();
+  }
+
+  photoInput.addEventListener('change', function () {
+    var file = this.files[0];
+    var exId = photoTarget;
+    this.value = '';
+    photoTarget = null;
+    if (!file || !exId || !getExercise(exId)) return;
+    resizeImage(file)
+      .then(function (dataUrl) { return setPhoto(exId, dataUrl); })
+      .then(render)
+      .catch(function () {
+        alert('Das Foto konnte nicht gespeichert werden.');
+      });
+  });
+
+  /* Kleines Vorschaubild; ohne Foto ein Kamera-Platzhalter. */
+  function buildThumb(exId, tag) {
+    var node = el(tag || 'div', 'ex-thumb');
+    if (photos[exId]) {
+      var img = el('img');
+      img.src = photos[exId];
+      img.alt = '';
+      node.appendChild(img);
+    } else {
+      node.classList.add('empty');
+      node.appendChild(el('span', null, '📷'));
+    }
+    return node;
+  }
+
+  /* ================= Vollbild-Foto ================= */
+
+  function openLightbox(exId) {
+    var ex = getExercise(exId);
+    if (!ex || !photos[exId]) return;
+    $('lightbox-img').src = photos[exId];
+    $('lightbox-img').alt = 'Foto: ' + ex.name;
+    $('lightbox-caption').textContent = ex.name;
+    $('lightbox').hidden = false;
+    document.body.classList.add('no-scroll');
+  }
+
+  function closeLightbox() {
+    if ($('lightbox').hidden) return;
+    $('lightbox').hidden = true;
+    $('lightbox-img').removeAttribute('src');
+    document.body.classList.remove('no-scroll');
+  }
+
+  $('lightbox').addEventListener('click', closeLightbox);
+  document.addEventListener('keydown', function (e) {
+    if (e.key === 'Escape') closeLightbox();
+  });
+
   /* ================= Datum ================= */
 
   function toISO(d) {
@@ -234,14 +416,30 @@
 
     var card = el('div', 'card ex-card');
     var head = el('div', 'ex-card-head');
-    head.appendChild(el('h3', null, ex.name));
+
+    // Gerätefoto: antippen = groß anzeigen, ohne Foto = direkt Kamera öffnen
+    var thumb = buildThumb(ex.id, 'button');
+    thumb.type = 'button';
+    if (photos[ex.id]) {
+      thumb.setAttribute('aria-label', 'Foto von ' + ex.name + ' anzeigen');
+      thumb.addEventListener('click', function () { openLightbox(ex.id); });
+    } else {
+      thumb.setAttribute('aria-label', 'Foto vom Gerät aufnehmen');
+      thumb.title = 'Foto vom Gerät aufnehmen';
+      thumb.addEventListener('click', function () { pickPhoto(ex.id, true); });
+    }
+    head.appendChild(thumb);
+
+    var titles = el('div', 'ex-card-titles');
+    titles.appendChild(el('h3', null, ex.name));
     if (sets.length) {
       var top = dayMetric(sets, 'top');
       var vol = dayMetric(sets, 'volume');
-      head.appendChild(el('div', 'ex-card-summary',
+      titles.appendChild(el('div', 'ex-card-summary',
         sets.length + (sets.length === 1 ? ' Satz' : ' Sätze') +
         ' · Top ' + formatNum(top) + ' kg · Vol. ' + formatNum(vol, 0) + ' kg'));
     }
+    head.appendChild(titles);
     card.appendChild(head);
 
     if (sets.length) {
@@ -377,7 +575,8 @@
     }
     data.exercises.forEach(function (ex) {
       var item = el('button', 'exercise-item');
-      var left = el('div');
+      item.appendChild(buildThumb(ex.id));
+      var left = el('div', 'exercise-item-text');
       left.appendChild(el('div', 'name', ex.name));
       var days = Object.keys(data.logs[ex.id] || {}).length;
       left.appendChild(el('div', 'meta', days ? days + (days === 1 ? ' Trainingstag' : ' Trainingstage') : 'Noch kein Training'));
@@ -413,13 +612,64 @@
     data.exercises = data.exercises.filter(function (e) { return e.id !== ex.id; });
     delete data.logs[ex.id];
     saveData();
+    removePhoto(ex.id);
     show('exercises');
   });
+
+  function renderDetailPhoto(ex) {
+    var box = $('detail-photo');
+    box.textContent = '';
+    var hasPhoto = !!photos[ex.id];
+
+    if (hasPhoto) {
+      var frame = el('button', 'detail-photo-frame');
+      frame.type = 'button';
+      frame.setAttribute('aria-label', 'Foto groß anzeigen');
+      var img = el('img');
+      img.src = photos[ex.id];
+      img.alt = 'Foto: ' + ex.name;
+      frame.appendChild(img);
+      frame.addEventListener('click', function () { openLightbox(ex.id); });
+      box.appendChild(frame);
+    } else {
+      var empty = el('div', 'detail-photo-empty');
+      empty.appendChild(el('span', 'big', '📷'));
+      empty.appendChild(document.createTextNode('Noch kein Foto vom Gerät.'));
+      empty.appendChild(document.createElement('br'));
+      empty.appendChild(document.createTextNode('Mach eins, damit du die Übung sofort wiedererkennst.'));
+      box.appendChild(empty);
+    }
+
+    var actions = el('div', 'detail-photo-actions');
+    var cam = el('button', 'btn-ghost', hasPhoto ? '📷 Neues Foto' : '📷 Foto aufnehmen');
+    cam.type = 'button';
+    cam.addEventListener('click', function () { pickPhoto(ex.id, true); });
+    actions.appendChild(cam);
+
+    var gal = el('button', 'btn-ghost', '🖼 Aus Galerie');
+    gal.type = 'button';
+    gal.addEventListener('click', function () { pickPhoto(ex.id, false); });
+    actions.appendChild(gal);
+
+    if (hasPhoto) {
+      var del = el('button', 'icon-btn danger', '🗑');
+      del.type = 'button';
+      del.setAttribute('aria-label', 'Foto entfernen');
+      del.title = 'Foto entfernen';
+      del.addEventListener('click', function () {
+        if (!confirm('Foto von „' + ex.name + '“ entfernen?')) return;
+        removePhoto(ex.id).then(render);
+      });
+      actions.appendChild(del);
+    }
+    box.appendChild(actions);
+  }
 
   function renderDetail() {
     var ex = getExercise(ui.detailId);
     if (!ex) { show('exercises'); return; }
     $('detail-name').textContent = ex.name;
+    renderDetailPhoto(ex);
 
     buildMetricToggle($('detail-metric-toggle'), ui.detailMetric, function (key) {
       ui.detailMetric = key;
@@ -519,7 +769,8 @@
   /* ================= Export / Import ================= */
 
   $('data-export').addEventListener('click', function () {
-    var blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
+    var backup = { exercises: data.exercises, logs: data.logs, photos: photos };
+    var blob = new Blob([JSON.stringify(backup, null, 2)], { type: 'application/json' });
     var a = document.createElement('a');
     a.href = URL.createObjectURL(blob);
     a.download = 'gym-tracker-backup-' + todayISO() + '.json';
@@ -545,6 +796,18 @@
         if (!confirm('Backup importieren? Die aktuellen Daten werden ersetzt.')) return;
         data = { exercises: parsed.exercises, logs: parsed.logs || {} };
         saveData();
+
+        // Fotos: Backup mit Fotos ersetzt alle Fotos. Ältere Backups ohne Fotos
+        // behalten die vorhandenen Fotos, soweit die Übung noch existiert.
+        var source = (parsed.photos && typeof parsed.photos === 'object') ? parsed.photos : photos;
+        var next = {};
+        data.exercises.forEach(function (ex) {
+          if (isPhotoDataUrl(source[ex.id])) next[ex.id] = source[ex.id];
+        });
+        photos = next;
+        PhotoStore.replaceAll(next).catch(function () {
+          alert('Hinweis: Die Fotos aus dem Backup konnten nicht gespeichert werden.');
+        });
         render();
         alert('Backup importiert.');
       } catch (e) {
@@ -696,4 +959,5 @@
   /* ================= Start ================= */
 
   show('training');
+  loadPhotos().then(render);
 })();
