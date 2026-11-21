@@ -1,0 +1,110 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="description" content="Gym Tracker – Trainingsfortschritt einfach tracken">
+  <meta name="theme-color" content="#101418">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="apple-mobile-web-app-title" content="Gym Tracker">
+  <link rel="manifest" href="manifest.json">
+  <link rel="icon" href="icon.svg" type="image/svg+xml">
+  <link rel="apple-touch-icon" href="icon.svg">
+  <link rel="stylesheet" href="style.css">
+  <title>Gym Tracker</title>
+</head>
+<body>
+
+  <header class="app-header">
+    <h1 id="view-title">Training</h1>
+  </header>
+
+  <main id="app">
+
+    <!-- ===== View: Training ===== -->
+    <section id="view-training" class="view">
+      <div class="date-nav card">
+        <button class="icon-btn" id="date-prev" aria-label="Vorheriger Tag">&#x2039;</button>
+        <div class="date-nav-center">
+          <div class="date-nav-label" id="date-label">Heute</div>
+          <div class="date-nav-date" id="date-value"></div>
+        </div>
+        <button class="icon-btn" id="date-next" aria-label="Nächster Tag">&#x203A;</button>
+      </div>
+      <button class="btn-ghost small" id="date-today" hidden>Zurück zu heute</button>
+      <div id="training-list"></div>
+    </section>
+
+    <!-- ===== View: Übungen (Liste) ===== -->
+    <section id="view-exercises" class="view" hidden>
+      <form id="exercise-add-form" class="card row-form">
+        <input type="text" id="exercise-add-name" placeholder="Neue Übung, z. B. Bankdrücken" maxlength="60" required>
+        <button type="submit" class="btn-primary">Anlegen</button>
+      </form>
+      <div id="exercise-list"></div>
+    </section>
+
+    <!-- ===== View: Übung Detail ===== -->
+    <section id="view-exercise-detail" class="view" hidden>
+      <button class="btn-ghost small" id="detail-back">&#x2039; Alle Übungen</button>
+      <div class="card">
+        <div class="detail-head">
+          <h2 id="detail-name"></h2>
+          <div class="detail-actions">
+            <button class="icon-btn" id="detail-rename" aria-label="Umbenennen">&#x270E;</button>
+            <button class="icon-btn danger" id="detail-delete" aria-label="Löschen">&#x1F5D1;</button>
+          </div>
+        </div>
+        <div class="metric-toggle" id="detail-metric-toggle"></div>
+        <div class="chart-wrap">
+          <canvas id="detail-chart"></canvas>
+          <div class="chart-empty" id="detail-chart-empty" hidden>Noch keine Trainingsdaten.<br>Erfasse Sets im Tab „Training“.</div>
+        </div>
+        <div class="chart-hint" id="detail-chart-hint"></div>
+      </div>
+      <h3 class="section-title">Verlauf</h3>
+      <div id="detail-history"></div>
+    </section>
+
+    <!-- ===== View: Statistik ===== -->
+    <section id="view-stats" class="view" hidden>
+      <div class="card">
+        <h2 class="card-title">Globale Entwicklung</h2>
+        <p class="card-sub">Durchschnitt aller Übungen, relativ zum jeweiligen Startwert (100&nbsp;%), im Tagesintervall.</p>
+        <div class="metric-toggle" id="stats-metric-toggle"></div>
+        <div class="chart-wrap">
+          <canvas id="stats-chart"></canvas>
+          <div class="chart-empty" id="stats-chart-empty" hidden>Noch keine Trainingsdaten vorhanden.</div>
+        </div>
+        <div class="chart-hint" id="stats-chart-hint"></div>
+      </div>
+      <div class="stat-grid" id="stats-numbers"></div>
+      <div class="card">
+        <h2 class="card-title">Daten</h2>
+        <p class="card-sub">Alle Daten liegen nur lokal auf diesem Gerät (Browser-Speicher).</p>
+        <div class="row-form">
+          <button class="btn-ghost" id="data-export">Backup exportieren</button>
+          <button class="btn-ghost" id="data-import">Backup importieren</button>
+        </div>
+        <input type="file" id="data-import-file" accept="application/json,.json" hidden>
+      </div>
+    </section>
+
+  </main>
+
+  <nav class="tabbar">
+    <button class="tab active" data-view="training">
+      <span class="tab-icon">&#x1F3CB;</span><span>Training</span>
+    </button>
+    <button class="tab" data-view="exercises">
+      <span class="tab-icon">&#x1F4CB;</span><span>Übungen</span>
+    </button>
+    <button class="tab" data-view="stats">
+      <span class="tab-icon">&#x1F4C8;</span><span>Statistik</span>
+    </button>
+  </nav>
+
+  <script src="app.js"></script>
+</body>
+</html>
