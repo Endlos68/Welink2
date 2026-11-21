@@ -1,13 +1,13 @@
 {
   "name": "Gym Tracker",
   "short_name": "Gym Tracker",
-  "description": "Trainingsfortschritt tracken: Sets, Gewichte und Performance-Verläufe",
+  "description": "Sätze, Gewichte und Fortschritt pro Übung tracken",
   "lang": "de",
   "start_url": "./index.html",
   "scope": "./",
   "display": "standalone",
-  "background_color": "#101418",
-  "theme_color": "#101418",
+  "background_color": "#0e1311",
+  "theme_color": "#0e1311",
   "icons": [
     {
       "src": "icon.svg",

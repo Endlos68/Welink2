@@ -3,8 +3,9 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-  <meta name="description" content="Gym Tracker – Trainingsfortschritt einfach tracken">
-  <meta name="theme-color" content="#101418">
+  <meta name="description" content="Gym Tracker: Sätze, Gewichte und Fortschritt pro Übung tracken">
+  <meta name="theme-color" content="#0e1311">
+  <meta name="color-scheme" content="dark">
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
   <meta name="apple-mobile-web-app-title" content="Gym Tracker">
@@ -16,104 +17,129 @@
 </head>
 <body>
 
-  <header class="app-header">
-    <h1 id="view-title">Training</h1>
+  <!-- Icon-Set (24er Raster, Linienstärke über CSS) -->
+  <svg width="0" height="0" style="position:absolute" aria-hidden="true">
+    <symbol id="i-barbell" viewBox="0 0 24 24"><path d="M6.5 6.5v11M17.5 6.5v11M3.5 9.5v5M20.5 9.5v5M6.5 12h11"/></symbol>
+    <symbol id="i-list" viewBox="0 0 24 24"><path d="M9 6.5h11M9 12h11M9 17.5h11"/><path d="M4.5 6.5h.01M4.5 12h.01M4.5 17.5h.01" stroke-width="3"/></symbol>
+    <symbol id="i-chart" viewBox="0 0 24 24"><path d="M4 4.5v15h16"/><path d="M7.5 15l3.5-4 3 2.5 5-6"/></symbol>
+    <symbol id="i-camera" viewBox="0 0 24 24"><path d="M4 8.5a1.5 1.5 0 0 1 1.5-1.5h2L9 5h6l1.5 2h2A1.5 1.5 0 0 1 20 8.5v9a1.5 1.5 0 0 1-1.5 1.5h-13A1.5 1.5 0 0 1 4 17.5z"/><circle cx="12" cy="12.75" r="3.25"/></symbol>
+    <symbol id="i-image" viewBox="0 0 24 24"><rect x="3.5" y="4.5" width="17" height="15" rx="2"/><circle cx="9" cy="10" r="1.75"/><path d="M20.5 15.5 15.5 11 6 19.5"/></symbol>
+    <symbol id="i-trash" viewBox="0 0 24 24"><path d="M4.5 7h15M9.5 7V4.75h5V7M6.5 7l1 12.5h9l1-12.5M10 10.5v6M14 10.5v6"/></symbol>
+    <symbol id="i-pencil" viewBox="0 0 24 24"><path d="M14.5 5.5l4 4M4.5 19.5l1-4.5L16 4.5a1.4 1.4 0 0 1 2 0l1.5 1.5a1.4 1.4 0 0 1 0 2L9 18.5z"/></symbol>
+    <symbol id="i-chevron-left" viewBox="0 0 24 24"><path d="M15 5.5 8.5 12 15 18.5"/></symbol>
+    <symbol id="i-chevron-right" viewBox="0 0 24 24"><path d="M9 5.5l6.5 6.5L9 18.5"/></symbol>
+    <symbol id="i-chevron-down" viewBox="0 0 24 24"><path d="M5.5 9 12 15.5 18.5 9"/></symbol>
+    <symbol id="i-x" viewBox="0 0 24 24"><path d="M6.5 6.5l11 11M17.5 6.5l-11 11"/></symbol>
+    <symbol id="i-check" viewBox="0 0 24 24"><path d="M5 12.5l4.5 4.5L19 7.5"/></symbol>
+    <symbol id="i-plus" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></symbol>
+    <symbol id="i-minus" viewBox="0 0 24 24"><path d="M5 12h14"/></symbol>
+    <symbol id="i-trend" viewBox="0 0 24 24"><path d="M3.5 16.5l6-6 4 4 7-7M15 7.5h5.5V13"/></symbol>
+    <symbol id="i-download" viewBox="0 0 24 24"><path d="M12 4v11M7 10.5l5 5 5-5M5 19.5h14"/></symbol>
+    <symbol id="i-upload" viewBox="0 0 24 24"><path d="M12 15.5v-11M7 9l5-5 5 5M5 19.5h14"/></symbol>
+  </svg>
+
+  <header class="app-header" id="app-header">
+    <div class="header-main" id="header-main"></div>
+    <div class="filter-bar" id="filter-bar" role="group" aria-label="Nach Kategorie filtern" hidden></div>
   </header>
 
   <main id="app">
 
-    <!-- ===== View: Training ===== -->
-    <section id="view-training" class="view">
-      <div class="date-nav card">
-        <button class="icon-btn" id="date-prev" aria-label="Vorheriger Tag">&#x2039;</button>
-        <div class="date-nav-center">
-          <div class="date-nav-label" id="date-label">Heute</div>
-          <div class="date-nav-date" id="date-value"></div>
-        </div>
-        <button class="icon-btn" id="date-next" aria-label="Nächster Tag">&#x203A;</button>
-      </div>
-      <button class="btn-ghost small" id="date-today" hidden>Zurück zu heute</button>
+    <!-- ===== Training ===== -->
+    <section id="view-training" class="view" aria-label="Training">
       <div id="training-list"></div>
     </section>
 
-    <!-- ===== View: Übungen (Liste) ===== -->
-    <section id="view-exercises" class="view" hidden>
-      <form id="exercise-add-form" class="card row-form">
-        <input type="text" id="exercise-add-name" placeholder="Neue Übung, z. B. Bankdrücken" maxlength="60" required>
-        <button type="submit" class="btn-primary">Anlegen</button>
+    <!-- ===== Übungen ===== -->
+    <section id="view-exercises" class="view" aria-label="Übungen" hidden>
+      <form id="exercise-add-form" class="add-form" novalidate>
+        <div class="add-row">
+          <label class="visually-hidden" for="exercise-add-name">Name der neuen Übung</label>
+          <input type="text" id="exercise-add-name" class="text-input" placeholder="z. B. Bankdrücken" maxlength="60" autocomplete="off" enterkeyhint="done">
+          <button type="submit" class="btn-primary">Anlegen</button>
+        </div>
+        <div class="cat-picker" id="add-cats" role="radiogroup" aria-label="Kategorie der neuen Übung"></div>
+        <p class="form-hint" id="add-hint" role="alert"></p>
       </form>
       <div id="exercise-list"></div>
     </section>
 
-    <!-- ===== View: Übung Detail ===== -->
-    <section id="view-exercise-detail" class="view" hidden>
-      <button class="btn-ghost small" id="detail-back">&#x2039; Alle Übungen</button>
-      <div class="card">
-        <div class="detail-head">
-          <h2 id="detail-name"></h2>
-          <div class="detail-actions">
-            <button class="icon-btn" id="detail-rename" aria-label="Umbenennen">&#x270E;</button>
-            <button class="icon-btn danger" id="detail-delete" aria-label="Löschen">&#x1F5D1;</button>
-          </div>
-        </div>
-        <div class="detail-photo" id="detail-photo"></div>
-        <div class="metric-toggle" id="detail-metric-toggle"></div>
+    <!-- ===== Übung Detail ===== -->
+    <section id="view-exercise-detail" class="view" aria-labelledby="detail-name" hidden>
+      <div class="detail-head" id="detail-head"></div>
+      <div class="cat-picker" id="detail-cats" role="radiogroup" aria-label="Kategorie"></div>
+      <div class="detail-photo" id="detail-photo"></div>
+      <dl class="facts" id="detail-facts"></dl>
+      <section class="panel" aria-label="Verlauf als Diagramm">
+        <div class="segmented" id="detail-metric-toggle"></div>
         <div class="chart-wrap">
-          <canvas id="detail-chart"></canvas>
-          <div class="chart-empty" id="detail-chart-empty" hidden>Noch keine Trainingsdaten.<br>Erfasse Sets im Tab „Training“.</div>
+          <canvas id="detail-chart" role="img" aria-label="Verlaufsdiagramm"></canvas>
+          <div class="chart-empty" id="detail-chart-empty" hidden>Noch keine Trainingsdaten.<br>Trag im Tab „Training“ den ersten Satz ein.</div>
         </div>
-        <div class="chart-hint" id="detail-chart-hint"></div>
-      </div>
-      <h3 class="section-title">Verlauf</h3>
-      <div id="detail-history"></div>
+        <p class="chart-hint" id="detail-chart-hint"></p>
+      </section>
+      <h2 class="section-title">Verlauf</h2>
+      <ol class="history" id="detail-history"></ol>
     </section>
 
-    <!-- ===== View: Statistik ===== -->
-    <section id="view-stats" class="view" hidden>
-      <div class="card">
-        <h2 class="card-title">Globale Entwicklung</h2>
-        <p class="card-sub">Durchschnitt aller Übungen, relativ zum jeweiligen Startwert (100&nbsp;%), im Tagesintervall.</p>
-        <div class="metric-toggle" id="stats-metric-toggle"></div>
+    <!-- ===== Statistik ===== -->
+    <section id="view-stats" class="view" aria-label="Statistik" hidden>
+      <dl class="facts" id="stats-numbers"></dl>
+      <section class="panel">
+        <h2 class="panel-title">Gesamtentwicklung</h2>
+        <p class="panel-sub">Durchschnitt aller Übungen, relativ zum jeweiligen Startwert (100&nbsp;%).</p>
+        <div class="segmented" id="stats-metric-toggle"></div>
         <div class="chart-wrap">
-          <canvas id="stats-chart"></canvas>
+          <canvas id="stats-chart" role="img" aria-label="Gesamtentwicklung als Diagramm"></canvas>
           <div class="chart-empty" id="stats-chart-empty" hidden>Noch keine Trainingsdaten vorhanden.</div>
         </div>
-        <div class="chart-hint" id="stats-chart-hint"></div>
-      </div>
-      <div class="stat-grid" id="stats-numbers"></div>
-      <div class="card">
-        <h2 class="card-title">Daten</h2>
-        <p class="card-sub">Alle Daten liegen nur lokal auf diesem Gerät (Browser-Speicher). Das Backup enthält auch die Gerätefotos.</p>
-        <div class="row-form">
-          <button class="btn-ghost" id="data-export">Backup exportieren</button>
-          <button class="btn-ghost" id="data-import">Backup importieren</button>
+        <p class="chart-hint" id="stats-chart-hint"></p>
+      </section>
+      <section class="panel">
+        <h2 class="panel-title">Sätze pro Kategorie</h2>
+        <p class="panel-sub">Letzte 4 Wochen</p>
+        <div class="cat-bars" id="stats-cats"></div>
+      </section>
+      <section class="panel">
+        <h2 class="panel-title">Daten</h2>
+        <p class="panel-sub">Alles liegt nur lokal auf diesem Gerät. Das Backup enthält Übungen, Sätze und Gerätefotos.</p>
+        <div class="btn-col">
+          <button type="button" class="btn-secondary" id="data-export"><svg class="i" aria-hidden="true"><use href="#i-download"/></svg>Backup sichern</button>
+          <button type="button" class="btn-secondary" id="data-import"><svg class="i" aria-hidden="true"><use href="#i-upload"/></svg>Backup laden</button>
         </div>
         <input type="file" id="data-import-file" accept="application/json,.json" hidden>
-      </div>
+      </section>
     </section>
 
   </main>
 
-  <nav class="tabbar">
-    <button class="tab active" data-view="training">
-      <span class="tab-icon">&#x1F3CB;</span><span>Training</span>
-    </button>
-    <button class="tab" data-view="exercises">
-      <span class="tab-icon">&#x1F4CB;</span><span>Übungen</span>
-    </button>
-    <button class="tab" data-view="stats">
-      <span class="tab-icon">&#x1F4C8;</span><span>Statistik</span>
-    </button>
+  <nav class="tabbar" aria-label="Hauptnavigation">
+    <div class="tabbar-inner">
+      <button class="tab" data-view="training" type="button">
+        <span class="tab-ico"><svg class="i" aria-hidden="true"><use href="#i-barbell"/></svg></span><span>Training</span>
+      </button>
+      <button class="tab" data-view="exercises" type="button">
+        <span class="tab-ico"><svg class="i" aria-hidden="true"><use href="#i-list"/></svg></span><span>Übungen</span>
+      </button>
+      <button class="tab" data-view="stats" type="button">
+        <span class="tab-ico"><svg class="i" aria-hidden="true"><use href="#i-chart"/></svg></span><span>Statistik</span>
+      </button>
+    </div>
   </nav>
 
   <!-- Foto-Auswahl (Kamera oder Galerie), wird per JS ausgelöst -->
   <input type="file" id="photo-input" accept="image/*" hidden>
 
   <!-- Vollbild-Ansicht für Gerätefotos -->
-  <div class="lightbox" id="lightbox" hidden role="dialog" aria-modal="true" aria-label="Foto">
-    <button class="icon-btn lightbox-close" id="lightbox-close" aria-label="Schließen">&#x2715;</button>
+  <div class="lightbox" id="lightbox" hidden role="dialog" aria-modal="true" aria-labelledby="lightbox-caption">
+    <button class="icon-btn lightbox-close" id="lightbox-close" type="button" aria-label="Foto schließen"><svg class="i" aria-hidden="true"><use href="#i-x"/></svg></button>
     <img id="lightbox-img" alt="">
-    <div class="lightbox-caption" id="lightbox-caption"></div>
+    <p class="lightbox-caption" id="lightbox-caption"></p>
+  </div>
+
+  <div class="toast" id="toast" role="status" aria-live="polite">
+    <span id="toast-text"></span>
+    <button type="button" class="toast-action" id="toast-action" hidden></button>
   </div>
 
   <script src="app.js"></script>
