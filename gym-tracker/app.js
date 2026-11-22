@@ -67,7 +67,7 @@
 
   /* Alte und neue Datenstände (auch Backups) auf ein gültiges Format bringen */
   function normalizeData(p) {
-    var out = { exercises: [], logs: {}, categories: [], goals: {}, settings: {} };
+    var out = { exercises: [], logs: {}, categories: [], goals: {}, body: {}, settings: {} };
     if (Array.isArray(p.exercises)) {
       out.exercises = p.exercises.filter(function (e) { return e && typeof e.id === 'string' && typeof e.name === 'string'; });
     }
@@ -91,6 +91,12 @@
         if (g !== undefined && /^\d{4}-\d{2}-\d{2}$/.test(d)) out.goals[d] = g;
       });
     }
+    if (p.body && typeof p.body === 'object') {
+      Object.keys(p.body).forEach(function (d) {
+        var v = +p.body[d];
+        if (/^\d{4}-\d{2}-\d{2}$/.test(d) && isFinite(v) && v >= 20 && v <= 400) out.body[d] = Math.round(v * 10) / 10;
+      });
+    }
     var s = p.settings && typeof p.settings === 'object' ? p.settings : {};
     out.settings = {
       restDefault: isFinite(s.restDefault) && s.restDefault > 0 ? clamp(Math.round(s.restDefault), 15, 900) : 120,
@@ -99,6 +105,7 @@
       vibrate: s.vibrate !== false,
       wakeLock: s.wakeLock !== false,
       notify: s.notify === true,
+      plateau: s.plateau !== false,
       goalDefault: cleanGoal(s.goalDefault) || null,
       goalDefaultSince: typeof s.goalDefaultSince === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(s.goalDefaultSince) ? s.goalDefaultSince : null
     };
@@ -248,9 +255,15 @@
     return reps <= 1 ? weight : weight * (1 + reps / 30);
   }
 
-  /* Tagesmetrik aus einer Set-Liste [{weight, reps}] */
+  /* Aufwärmsätze (s.w) zählen nicht für Volumen, Rekorde, Ziele und Plateaus */
+  function working(sets) {
+    return (sets || []).filter(function (s) { return !s.w; });
+  }
+
+  /* Tagesmetrik aus einer Set-Liste [{weight, reps}], nur Arbeitssätze */
   function dayMetric(sets, metric) {
-    if (!sets || !sets.length) return null;
+    sets = working(sets);
+    if (!sets.length) return null;
     var i, v = 0;
     if (metric === 'volume') {
       for (i = 0; i < sets.length; i++) v += sets[i].weight * sets[i].reps;
@@ -316,6 +329,7 @@
     Object.keys(log).sort().forEach(function (date) {
       var sets = log[date] || [];
       sets.forEach(function (s, i) {
+        if (s.w) return;
         var e = epley(s.weight, s.reps);
         if (hasPrior && s.weight > maxW + 1e-9) {
           (marks[date] = marks[date] || {})[i] = 'weight';
@@ -329,16 +343,55 @@
         if (s.weight > maxW) maxW = s.weight;
         if (e > maxE) maxE = e;
       });
-      if (sets.length) hasPrior = true;
+      if (working(sets).length) hasPrior = true;
     });
     return { marks: marks, events: events, record: record, bestE1rm: maxE };
+  }
+
+  /* Plateau: Einheiten in Folge ohne Fortschritt (weder schwerer noch besseres
+     geschätztes 1RM). Ab 3 Einheiten ein Hinweis. "before" schließt den Tag
+     selbst aus (im Training: die laufende Einheit). Alte Übungen (> 60 Tage)
+     werden ignoriert. */
+  function plateauInfo(exId, before) {
+    var log = data.logs[exId] || {};
+    var days = Object.keys(log).sort().filter(function (d) {
+      return (!before || d < before) && working(log[d]).length;
+    });
+    if (days.length < 4 || daysAgo(days[days.length - 1]) > 60) return null;
+    var maxW = 0, maxE = 0, stalled = 0, lastUp = null;
+    days.forEach(function (d, i) {
+      var top = dayMetric(log[d], 'top');
+      var e = dayMetric(log[d], 'e1rm');
+      if (i === 0 || top > maxW + 1e-9 || e > maxE + 1e-9) { stalled = 0; lastUp = d; }
+      else stalled++;
+      maxW = Math.max(maxW, top);
+      maxE = Math.max(maxE, e);
+    });
+    return stalled >= 3 ? { sessions: stalled, lastUp: lastUp, bestE1rm: maxE } : null;
+  }
+
+  function plateauTip(p) {
+    return p.sessions >= 5
+      ? 'Hält das an, hilft oft eine leichtere Woche mit etwa 10 % weniger Gewicht. Danach greifst du neu an.'
+      : 'Probier heute 2,5 kg mehr mit weniger Wiederholungen oder bei gleichem Gewicht eine Wiederholung mehr.';
+  }
+
+  function plateauBox(p, withDate) {
+    var box = el('div', 'plateau-box');
+    box.appendChild(icon('flat'));
+    var t = el('div', 'plateau-text');
+    t.appendChild(el('b', null, 'Plateau: seit ' + p.sessions + ' Einheiten keine Steigerung'));
+    t.appendChild(el('span', null, (withDate ? 'Letzte Steigerung am ' + formatISO(p.lastUp, true) + '. ' : '') + plateauTip(p)));
+    box.appendChild(t);
+    return box;
   }
 
   function lastSession(exId, beforeISO) {
     var log = data.logs[exId] || {};
     var dates = Object.keys(log).sort();
     for (var i = dates.length - 1; i >= 0; i--) {
-      if (dates[i] < beforeISO && log[dates[i]] && log[dates[i]].length) return { date: dates[i], sets: log[dates[i]] };
+      var ws = working(log[dates[i]]);
+      if (dates[i] < beforeISO && ws.length) return { date: dates[i], sets: ws };
     }
     return null;
   }
@@ -350,7 +403,7 @@
 
   function topSet(sets) {
     var best = null;
-    sets.forEach(function (s) {
+    working(sets).forEach(function (s) {
       if (!best || s.weight > best.weight || (s.weight === best.weight && s.reps > best.reps)) best = s;
     });
     return best;
@@ -364,8 +417,7 @@
       if (!day || !day.length) return;
       exercises++;
       day.forEach(function (s) {
-        sets++;
-        volume += s.weight * s.reps;
+        if (!s.w) { sets++; volume += s.weight * s.reps; }
         if (s.t) { nt++; tMin = Math.min(tMin, s.t); tMax = Math.max(tMax, s.t); }
       });
     });
@@ -420,6 +472,7 @@
     statsRange: ['4w', '3m', '1y', 'all'].indexOf(prefs.statsRange) >= 0 ? prefs.statsRange : '3m',
     statsCatMode: prefs.statsCatMode === 'volume' ? 'volume' : 'sets',
     renaming: false,
+    sorting: false,            // Übungen: Reihenfolge per Ziehen ändern
     newCategory: null,         // Auswahl im Anlegen-Formular
     newId: null                // frisch angelegte Übung (kurz hervorheben)
   };
@@ -1206,6 +1259,17 @@
       var h = el('h1', 'title', 'Übungen');
       if (data.exercises.length) h.appendChild(el('span', 'title-count', String(data.exercises.length)));
       main.appendChild(h);
+      if (data.exercises.length > 1) {
+        var sortBtn = ui.sorting ? btn('btn-primary btn-small', 'Fertig') : btn('btn-chip', 'Sortieren', 'grip');
+        sortBtn.classList.add('header-end');
+        sortBtn.setAttribute('aria-pressed', String(ui.sorting));
+        sortBtn.addEventListener('click', function () {
+          haptic('tap');
+          ui.sorting = !ui.sorting;
+          transition(function () { renderHeader(); renderExercises(); });
+        });
+        main.appendChild(sortBtn);
+      }
     } else if (ui.view === 'exerciseDetail') {
       var backBtn = btn('back-btn', 'Übungen', 'chevron-left');
       backBtn.addEventListener('click', closeDetail);
@@ -1320,7 +1384,7 @@
     if (ui.filter === 'all') {
       groupByCategory(list).forEach(function (g) {
         container.appendChild(groupHead(g));
-        if (g.key === NONE && ui.view === 'exercises') {
+        if (g.key === NONE && ui.view === 'exercises' && !ui.sorting) {
           container.appendChild(el('p', 'group-note', 'Tippe eine Übung an, um ihr eine Kategorie zu geben.'));
         }
         var stack = el('div', stackClass);
@@ -1368,6 +1432,7 @@
   };
 
   function applyView(view) {
+    if (view !== 'exercises') ui.sorting = false;
     ui.view = view;
     Object.keys(VIEW_IDS).forEach(function (v) { $(VIEW_IDS[v]).hidden = v !== view; });
     var tabView = view === 'exerciseDetail' ? 'exercises' : view;
@@ -1528,9 +1593,14 @@
 
   function trainingMeta(ex, sets) {
     var meta = el('span', 'ex-meta');
+    var ws = working(sets);
+    if (ws.length) {
+      var top = topSet(ws);
+      meta.textContent = plural(ws.length, 'Satz', 'Sätze') + ' · Top ' + formatWeight(top.weight) + ' kg';
+      return meta;
+    }
     if (sets.length) {
-      var top = topSet(sets);
-      meta.textContent = plural(sets.length, 'Satz', 'Sätze') + ' · Top ' + formatWeight(top.weight) + ' kg';
+      meta.textContent = plural(sets.length, 'Aufwärmsatz', 'Aufwärmsätze');
       return meta;
     }
     var last = lastSession(ex.id, ui.date);
@@ -1565,12 +1635,18 @@
     toggle.appendChild(text);
 
     var status = el('span', 'ex-status');
-    if (sets.length) {
+    var workCount = working(sets).length;
+    if (workCount) {
       var pill = el('span', 'done-pill');
       pill.appendChild(icon('check'));
-      pill.appendChild(el('span', null, String(sets.length)));
-      pill.setAttribute('aria-label', plural(sets.length, 'Satz', 'Sätze') + ' erledigt');
+      pill.appendChild(el('span', null, String(workCount)));
+      pill.setAttribute('aria-label', plural(workCount, 'Satz', 'Sätze') + ' erledigt');
       status.appendChild(pill);
+    } else if (!open && data.settings.plateau && plateauInfo(ex.id, ui.date)) {
+      var pp = el('span', 'plateau-pill');
+      pp.appendChild(icon('flat'));
+      pp.appendChild(el('span', null, 'Plateau'));
+      status.appendChild(pp);
     }
     status.appendChild(icon('chevron-down', 'chev'));
     toggle.appendChild(status);
@@ -1616,7 +1692,7 @@
   function getDraft(ex) {
     if (ui.draft && ui.draft.exId === ex.id && ui.draft.date === ui.date) return ui.draft;
     var pre = prefillValues(ex.id);
-    ui.draft = { exId: ex.id, date: ui.date, weight: pre ? pre.weight : 20, reps: pre ? pre.reps : 10 };
+    ui.draft = { exId: ex.id, date: ui.date, weight: pre ? pre.weight : 20, reps: pre ? pre.reps : 10, warmup: false };
     return ui.draft;
   }
 
@@ -1646,6 +1722,11 @@
       form.appendChild(note);
     }
 
+    // Plateau-Hinweis, solange heute noch keine Steigerung dabei ist
+    var plat = data.settings.plateau ? plateauInfo(ex.id, ui.date) : null;
+    var improvedToday = Object.keys(marks).length > 0;
+    if (plat && !improvedToday) form.appendChild(plateauBox(plat, false));
+
     // Referenz: letztes Mal und persönlicher Rekord
     var last = lastSession(ex.id, ui.date);
     var ref = el('div', 'log-ref');
@@ -1670,18 +1751,50 @@
     if (sets.length) {
       var ol = el('ol', 'sets');
       ol.setAttribute('aria-label', 'Sätze heute');
+      var wn = 0, an = 0;
       sets.forEach(function (s, idx) {
-        ol.appendChild(buildSetRow(ex, s, idx, marks[idx], editing && editing.index === idx));
+        var lbl = s.w ? 'A' + (++an) : String(++wn);
+        ol.appendChild(buildSetRow(ex, s, idx, marks[idx], editing && editing.index === idx, lbl));
       });
       form.appendChild(ol);
     }
 
     var draft = getDraft(ex);
+    var workCount = working(sets).length;
+    var warmCount = sets.length - workCount;
+    // Nummer des bearbeiteten Arbeitssatzes (für "Satz 2 speichern")
+    var editNo = null;
+    if (editing && sets[editing.index] && !sets[editing.index].w) {
+      editNo = working(sets.slice(0, editing.index + 1)).length;
+    }
     var logBtn = el('button', 'btn-primary');
     logBtn.type = 'submit';
-    logBtn.textContent = editing ? 'Satz ' + (editing.index + 1) + ' speichern' : 'Satz ' + (sets.length + 1) + ' eintragen';
 
     function sync() { logBtn.disabled = !isValidSet(draft.weight, draft.reps); }
+    function updateLabel() {
+      logBtn.classList.toggle('is-warm', !!draft.warmup);
+      if (editing) logBtn.textContent = draft.warmup ? 'Aufwärmsatz speichern' : 'Satz ' + (editNo ? editNo + ' ' : '') + 'speichern';
+      else logBtn.textContent = draft.warmup ? 'Aufwärmsatz ' + (warmCount + 1) + ' eintragen' : 'Satz ' + (workCount + 1) + ' eintragen';
+    }
+
+    // Satztyp: Arbeitssatz oder Aufwärmsatz
+    var typeSeg = el('div', 'segmented set-type');
+    typeSeg.setAttribute('role', 'group');
+    typeSeg.setAttribute('aria-label', 'Satztyp');
+    [{ warm: false, label: 'Arbeitssatz' }, { warm: true, label: 'Aufwärmsatz' }].forEach(function (o) {
+      var b = btn(null, o.label, o.warm ? 'flame' : null);
+      b.setAttribute('aria-pressed', String(!!draft.warmup === o.warm));
+      b.addEventListener('click', function () {
+        if (!!draft.warmup === o.warm) return;
+        haptic('tick');
+        draft.warmup = o.warm;
+        typeSeg.querySelectorAll('button').forEach(function (x) { x.setAttribute('aria-pressed', String(x === b)); });
+        updateLabel();
+      });
+      typeSeg.appendChild(b);
+    });
+    form.appendChild(typeSeg);
+    updateLabel();
 
     var steppers = el('div', 'steppers');
     steppers.appendChild(buildStepper(draft, { field: 'weight', step: 2.5, unit: 'kg', label: 'Gewicht', decimal: true }, sync));
@@ -1703,7 +1816,7 @@
     }
     actions.appendChild(logBtn);
     form.appendChild(actions);
-    if (!editing) form.appendChild(buildRestLine(ex, sets.length));
+    if (!editing) form.appendChild(buildRestLine(ex, workCount));
     sync();
 
     form.addEventListener('submit', function (e) {
@@ -1743,16 +1856,17 @@
     return row;
   }
 
-  function buildSetRow(ex, s, idx, mark, isEditing) {
-    var li = el('li', 'set' + (isEditing ? ' is-editing' : ''));
+  function buildSetRow(ex, s, idx, mark, isEditing, lbl) {
+    var li = el('li', 'set' + (isEditing ? ' is-editing' : '') + (s.w ? ' is-warm' : ''));
+    var name = s.w ? 'Aufwärmsatz ' + lbl.slice(1) : 'Satz ' + lbl;
     var f = ui.flash;
     if (f && f.exId === ex.id && f.date === ui.date && f.index === idx) li.classList.add('is-new');
 
     var main = el('button', 'set-main');
     main.type = 'button';
-    main.setAttribute('aria-label', 'Satz ' + (idx + 1) + ': ' + setText(s) +
+    main.setAttribute('aria-label', name + ': ' + setText(s) +
       (mark === 'weight' ? ', neuer Rekord' : mark === 'best' ? ', Bestleistung' : '') + '. Bearbeiten');
-    main.appendChild(el('span', 'set-no', String(idx + 1)));
+    main.appendChild(el('span', 'set-no', lbl));
     var val = el('span', 'set-val');
     val.appendChild(document.createTextNode(formatWeight(s.weight)));
     val.appendChild(el('span', 'u', ' kg'));
@@ -1768,14 +1882,14 @@
       haptic('tap');
       transition(function () {
         ui.editing = { exId: ex.id, date: ui.date, index: idx };
-        ui.draft = { exId: ex.id, date: ui.date, weight: s.weight, reps: s.reps };
+        ui.draft = { exId: ex.id, date: ui.date, weight: s.weight, reps: s.reps, warmup: !!s.w };
         renderTraining();
       });
     });
     li.appendChild(main);
 
-    var del = btn('set-del', null, 'x', 'Satz ' + (idx + 1) + ' löschen');
-    del.addEventListener('click', function () { deleteSet(ex, idx); });
+    var del = btn('set-del', null, 'x', name + ' löschen');
+    del.addEventListener('click', function () { deleteSet(ex, idx, name); });
     li.appendChild(del);
     return li;
   }
@@ -1820,7 +1934,7 @@
       var cur = draft[f];
       var s = opts.step;
       // auf das Raster einrasten (z. B. 61 -> 62,5 bzw. 60)
-      var next = dir > 0 ? Math.floor(cur / s + 1e-9) * s + s : Math.ceil(cur / s - 1e-9) * s - s;
+      var next = dir > 0 ? Math.floor(cur / s + 1e-6) * s + s : Math.ceil(cur / s - 1e-6) * s - s;
       next = clean(next);
       if (next === cur) return false;
       draft[f] = next;
@@ -1894,6 +2008,7 @@
     if (!data.logs[ex.id]) data.logs[ex.id] = {};
     var day = data.logs[ex.id][date] || (data.logs[ex.id][date] = []);
     var set = { weight: draft.weight, reps: draft.reps };
+    if (draft.warmup) set.w = 1;
     if (date === todayISO()) set.t = Date.now();
     day.push(set);
     saveData();
@@ -1912,9 +2027,10 @@
     haptic(mark === 'weight' ? 'record' : mark ? 'success' : 'tap');
     if (mark === 'weight' && data.settings.sound) Sound.record();
 
-    // Pausentimer für den nächsten Satz
+    // Pausentimer für den nächsten Satz (nach dem Aufwärmen höchstens 1:00)
     var sec = restFor(ex);
-    if (data.settings.restAuto && sec > 0) startRest(ex.id, idx + 2, sec);
+    if (draft.warmup) sec = Math.min(sec, 60);
+    if (data.settings.restAuto && sec > 0) startRest(ex.id, working(day).length + 1, sec);
 
     transition(function () {
       ui.flash = { exId: ex.id, date: date, index: idx };
@@ -1939,6 +2055,7 @@
     if (!day || !day[editing.index]) return;
     var old = day[editing.index];
     var updated = { weight: draft.weight, reps: draft.reps };
+    if (draft.warmup) updated.w = 1;
     if (old.t) updated.t = old.t;
     day[editing.index] = updated;
     saveData();
@@ -1951,7 +2068,7 @@
     }, function () { ui.flash = null; });
   }
 
-  function deleteSet(ex, idx) {
+  function deleteSet(ex, idx, name) {
     var date = ui.date;
     var day = (data.logs[ex.id] || {})[date];
     if (!day) return;
@@ -1963,7 +2080,7 @@
       ui.editing = null;
       renderTraining();
     });
-    toast('Satz ' + (idx + 1) + ' gelöscht', 'Rückgängig', function () {
+    toast((name || 'Satz') + ' gelöscht', 'Rückgängig', function () {
       var log = data.logs[ex.id] || (data.logs[ex.id] = {});
       var d = log[date] || (log[date] = []);
       d.splice(Math.min(idx, d.length), 0, removed);
@@ -2246,8 +2363,12 @@
 
   function renderExercises() {
     renderAddPicker();
+    $('exercise-add-form').hidden = ui.sorting;
     var list = $('exercise-list');
     list.textContent = '';
+    if (ui.sorting && data.exercises.length > 1) {
+      list.appendChild(el('p', 'sort-hint', 'Halte den Griff und zieh die Übung an ihren Platz. Die Reihenfolge gilt auch im Training.'));
+    }
     if (!data.exercises.length) {
       list.appendChild(emptyState('camera', 'Deine Geräte, auf einen Blick',
         'Name eingeben, Kategorie wählen, anlegen. Danach kannst du für jede Übung ein Foto vom Gerät machen.'));
@@ -2258,7 +2379,136 @@
       list.appendChild(emptyState('list', 'Keine Übungen für ' + catLabel(ui.filter), 'Leg oben die erste an.'));
       return;
     }
-    renderGrouped(list, items, buildListRow, 'list-stack');
+    renderGrouped(list, items, ui.sorting ? buildSortRow : buildListRow, 'list-stack');
+  }
+
+  /* ---- Reihenfolge ändern: Ziehen am Griff oder Pfeiltasten ---- */
+
+  /* Neue Reihenfolge der sichtbaren Übungen übernehmen; alle anderen
+     behalten ihren Platz in data.exercises */
+  function applyOrder(ids) {
+    var pos = ids.map(function (id) {
+      for (var i = 0; i < data.exercises.length; i++) if (data.exercises[i].id === id) return i;
+      return -1;
+    }).sort(function (a, b) { return a - b; });
+    var objs = ids.map(getExercise);
+    pos.forEach(function (p, k) { data.exercises[p] = objs[k]; });
+  }
+
+  function announce(text) {
+    var live = $('sr-live');
+    live.textContent = '';
+    setTimeout(function () { live.textContent = text; }, 30);
+  }
+
+  function focusGrip(exId) {
+    var g = document.querySelector('.row[data-id="' + exId + '"] .grip');
+    if (g) g.focus({ preventScroll: false });
+  }
+
+  function buildSortRow(ex) {
+    var row = applyCat(el('div', 'row is-sorting'), catOf(ex));
+    row.dataset.id = ex.id;
+    row.appendChild(buildThumb(ex.id));
+    var text = el('span', 'ex-text');
+    text.appendChild(el('span', 'ex-name', ex.name));
+    text.appendChild(el('span', 'ex-meta', catLabel(catOf(ex))));
+    row.appendChild(text);
+    var grip = btn('grip', null, 'grip', 'Position von ' + ex.name + ' ändern. Pfeiltasten verschieben.');
+    grip.addEventListener('pointerdown', function (e) { startDrag(e, row, grip); });
+    grip.addEventListener('keydown', function (e) {
+      if (e.key !== 'ArrowUp' && e.key !== 'ArrowDown') return;
+      e.preventDefault();
+      var stack = row.parentNode;
+      var ids = Array.prototype.map.call(stack.children, function (r) { return r.dataset.id; });
+      var i = ids.indexOf(ex.id);
+      var j = i + (e.key === 'ArrowUp' ? -1 : 1);
+      if (j < 0 || j >= ids.length) return;
+      ids.splice(i, 1);
+      ids.splice(j, 0, ex.id);
+      applyOrder(ids);
+      saveData();
+      haptic('tick');
+      renderExercises();
+      focusGrip(ex.id);
+      announce(ex.name + ': Position ' + (j + 1) + ' von ' + ids.length);
+    });
+    row.appendChild(grip);
+    return row;
+  }
+
+  function startDrag(e, row, grip) {
+    if (e.button !== 0) return;
+    var stack = row.parentNode;
+    var rows = Array.prototype.slice.call(stack.children);
+    if (rows.length < 2) return;
+    e.preventDefault();
+    var from = rows.indexOf(row);
+    var to = from;
+    var scroll0 = window.scrollY;
+    var rects = rows.map(function (r) { return r.getBoundingClientRect(); });
+    var tops = rects.map(function (r) { return r.top + scroll0; });
+    var heights = rects.map(function (r) { return r.height; });
+    var gap = Math.max(0, rects[1].top - rects[0].bottom);
+    var shift = heights[from] + gap;
+    var y0 = e.clientY;
+    var lastY = e.clientY;
+    var raf = null;
+    try { grip.setPointerCapture(e.pointerId); } catch (err) { /* egal */ }
+    row.classList.add('is-dragging');
+    stack.classList.add('is-sort-active');
+    haptic('tap');
+
+    function update() {
+      var dy = lastY - y0 + (window.scrollY - scroll0);
+      row.style.transform = 'translateY(' + dy + 'px)';
+      var center = tops[from] + heights[from] / 2 + dy;
+      var next = from;
+      for (var i = from + 1; i < rows.length; i++) if (center > tops[i] + heights[i] / 2) next = i;
+      for (var j = from - 1; j >= 0; j--) if (center < tops[j] + heights[j] / 2) next = j;
+      if (next === to) return;
+      to = next;
+      haptic('tick');
+      rows.forEach(function (r, k) {
+        if (k === from) return;
+        var off = 0;
+        if (from < to && k > from && k <= to) off = -shift;
+        if (to < from && k >= to && k < from) off = shift;
+        r.style.transform = off ? 'translateY(' + off + 'px)' : '';
+      });
+    }
+    // Am oberen/unteren Rand automatisch scrollen
+    function autoScroll() {
+      var topLimit = $('app-header').getBoundingClientRect().bottom + 60;
+      var bottomLimit = document.querySelector('.tabbar').getBoundingClientRect().top - 60;
+      var speed = 0;
+      if (lastY < topLimit) speed = -Math.ceil((topLimit - lastY) / 5);
+      else if (lastY > bottomLimit) speed = Math.ceil((lastY - bottomLimit) / 5);
+      if (speed) { window.scrollBy(0, speed); update(); }
+      raf = requestAnimationFrame(autoScroll);
+    }
+    function move(ev) { lastY = ev.clientY; update(); }
+    function end() {
+      cancelAnimationFrame(raf);
+      grip.removeEventListener('pointermove', move);
+      grip.removeEventListener('pointerup', end);
+      grip.removeEventListener('pointercancel', end);
+      var ids = rows.map(function (r) { return r.dataset.id; });
+      var moved = ids.splice(from, 1)[0];
+      ids.splice(to, 0, moved);
+      if (to !== from) {
+        applyOrder(ids);
+        saveData();
+        haptic('success');
+        announce(getExercise(moved).name + ': Position ' + (to + 1) + ' von ' + ids.length);
+      }
+      renderExercises();
+      focusGrip(moved);
+    }
+    grip.addEventListener('pointermove', move);
+    grip.addEventListener('pointerup', end);
+    grip.addEventListener('pointercancel', end);
+    raf = requestAnimationFrame(autoScroll);
   }
 
   function buildListRow(ex) {
@@ -2432,6 +2682,7 @@
     if (!days.length) return;
     var recs = computeRecords(ex.id);
     var rec = recs.record;
+    if (!rec) { dl.hidden = true; return; }
     dl.appendChild(fact('Rekord', formatWeight(rec.weight), 'kg', '× ' + rec.reps + ' · ' + formatISO(rec.date), 'is-record'));
     dl.appendChild(fact('Bestes 1RM', formatNum(recs.bestE1rm, recs.bestE1rm >= 100 ? 0 : 1), 'kg', 'geschätzt'));
     dl.appendChild(fact('Trainingstage', String(days.length), null, plural(recs.events.length, 'Rekord', 'Rekorde')));
@@ -2488,6 +2739,10 @@
     renderDetailCats(ex);
     renderDetailPhoto(ex);
     renderDetailFacts(ex);
+    var platBox = $('detail-plateau');
+    platBox.textContent = '';
+    var plat = data.settings.plateau ? plateauInfo(ex.id, null) : null;
+    if (plat) platBox.appendChild(plateauBox(plat, true));
     renderDetailExtra(ex);
 
     buildSegmented($('detail-metric-toggle'), METRICS, ui.detailMetric, function (key) {
@@ -2507,14 +2762,15 @@
     dates.slice(0, 40).forEach(function (date) {
       var li = el('li');
       li.appendChild(el('span', 'h-date', formatISOLong(date)));
-      li.appendChild(el('span', 'h-vol', formatNum(dayMetric(log[date], 'volume'), 0) + ' kg Volumen'));
+      li.appendChild(el('span', 'h-vol', formatNum(dayMetric(log[date], 'volume') || 0, 0) + ' kg Volumen'));
       var setsBox = el('span', 'h-sets');
       log[date].forEach(function (s, i) {
         var m = marks[date] && marks[date][i];
-        var chip = el('span', 'h-set' + (m === 'weight' ? ' rec' : m === 'best' ? ' pr' : ''));
+        var chip = el('span', 'h-set' + (m === 'weight' ? ' rec' : m === 'best' ? ' pr' : '') + (s.w ? ' warm' : ''));
         if (m === 'weight') chip.appendChild(icon('trophy'));
-        chip.appendChild(document.createTextNode(formatWeight(s.weight) + ' × ' + s.reps));
+        chip.appendChild(document.createTextNode((s.w ? 'A ' : '') + formatWeight(s.weight) + ' × ' + s.reps));
         if (m) chip.title = m === 'weight' ? 'Rekord' : 'Bestleistung';
+        if (s.w) chip.title = 'Aufwärmsatz';
         setsBox.appendChild(chip);
       });
       li.appendChild(setsBox);
@@ -2604,7 +2860,7 @@
         if (d < since || d > until || !log[d] || !log[d].length) return;
         days[d] = true;
         exercises[ex.id] = true;
-        log[d].forEach(function (s) { sets++; volume += s.weight * s.reps; });
+        working(log[d]).forEach(function (s) { sets++; volume += s.weight * s.reps; });
       });
       computeRecords(ex.id).events.forEach(function (e) { if (e.date >= since && e.date <= until) records++; });
     });
@@ -2640,6 +2896,7 @@
       transition(renderStats, null, 'list');
     });
 
+    renderBodyWeight(statsRange());
     var hasData = allTrainingDates().length > 0;
     $('stats-body').hidden = !hasData;
     var empty = $('stats-empty');
@@ -2676,6 +2933,7 @@
     renderWeekly(range);
     renderRecordList(range);
     renderProgressList(range);
+    renderPlateauList();
     buildSegmented($('stats-cat-mode'), [{ key: 'sets', label: 'Sätze' }, { key: 'volume', label: 'Volumen' }], ui.statsCatMode, function (key) {
       ui.statsCatMode = key;
       savePrefs();
@@ -2702,7 +2960,7 @@
     data.exercises.forEach(function (ex) {
       var log = data.logs[ex.id] || {};
       Object.keys(log).forEach(function (d) {
-        if (d >= start && d <= today && log[d] && log[d].length) vol[d] = (vol[d] || 0) + dayMetric(log[d], 'volume');
+        if (d >= start && d <= today && log[d] && log[d].length) vol[d] = (vol[d] || 0) + (dayMetric(log[d], 'volume') || 0);
       });
     });
     var max = 0;
@@ -2792,7 +3050,7 @@
       Object.keys(log).forEach(function (d) {
         var i = idx[weekStartISO(d)];
         if (i === undefined || !log[d] || !log[d].length) return;
-        weeks[i].value += dayMetric(log[d], 'volume');
+        weeks[i].value += dayMetric(log[d], 'volume') || 0;
         weeks[i].days[d] = true;
       });
     });
@@ -2862,6 +3120,95 @@
     });
   }
 
+  function renderPlateauList() {
+    var panel = $('plateau-panel');
+    panel.hidden = !data.settings.plateau;
+    if (!data.settings.plateau) return;
+    var list = $('stats-plateaus');
+    list.textContent = '';
+    var rows = [];
+    data.exercises.forEach(function (ex) {
+      var p = plateauInfo(ex.id, null);
+      if (p) rows.push({ ex: ex, p: p });
+    });
+    rows.sort(function (a, b) { return b.p.sessions - a.p.sessions; });
+    if (!rows.length) {
+      list.appendChild(el('li', 'empty-line', 'Keine Plateaus. Alle aktiven Übungen haben sich zuletzt gesteigert.'));
+      return;
+    }
+    rows.forEach(function (r) {
+      list.appendChild(rankRow(r.ex, r.ex.name, 'Letzte Steigerung ' + relativeDay(r.p.lastUp, true),
+        plural(r.p.sessions, 'Einheit', 'Einheiten'), 'flat'));
+    });
+  }
+
+  /* ---- Körpergewicht ---- */
+
+  function renderBodyWeight(range) {
+    var dates = Object.keys(data.body).sort();
+    var now = $('stats-bw-now');
+    var wrap = $('stats-bw-wrap');
+    now.textContent = '';
+    if (!dates.length) {
+      now.textContent = 'Noch kein Eintrag. Am besten morgens wiegen, vor dem Frühstück.';
+      wrap.hidden = true;
+      $('stats-bw-hint').textContent = '';
+      return;
+    }
+    var last = dates[dates.length - 1];
+    now.appendChild(el('b', null, formatWeight(data.body[last]) + ' kg'));
+    now.appendChild(document.createTextNode(' ' + relativeDay(last, true)));
+    var series = dates.filter(function (d) { return d >= range.since; }).map(function (d) { return { date: d, value: data.body[d] }; });
+    if (series.length >= 2) {
+      var diff = Math.round((series[series.length - 1].value - series[0].value) * 10) / 10;
+      now.appendChild(el('span', 'bw-diff' + (diff < 0 ? ' down' : diff > 0 ? ' up' : ''),
+        ' · ' + (diff > 0 ? '+' : diff < 0 ? '−' : '±') + formatWeight(Math.abs(diff)) + ' kg im Zeitraum'));
+    }
+    wrap.hidden = series.length < 2;
+    if (series.length < 2) { $('stats-bw-hint').textContent = series.length ? 'Ab zwei Einträgen im Zeitraum siehst du hier den Verlauf.' : ''; return; }
+    drawChart($('stats-bw-chart'), series, {
+      hintEl: $('stats-bw-hint'),
+      hintFormat: function (pt, isLast) {
+        return [(isLast ? 'Zuletzt ' : '') + formatISO(pt.date, true) + ': ', formatWeight(pt.value) + ' kg', ''];
+      }
+    });
+  }
+
+  function openBodySheet() {
+    var today = todayISO();
+    var dates = Object.keys(data.body).sort();
+    var lastVal = dates.length ? data.body[dates[dates.length - 1]] : 75;
+    var draft = { value: has(data.body, today) ? data.body[today] : lastVal };
+    openSheet('Körpergewicht heute', function (body, close) {
+      var save = btn('btn-primary sheet-save', 'Speichern');
+      body.appendChild(buildStepper(draft, { field: 'value', step: 0.1, unit: 'kg', label: 'Körpergewicht', decimal: true, max: 400 }, function () {
+        save.disabled = !(draft.value >= 20);
+      }));
+      save.addEventListener('click', function () {
+        if (!(draft.value >= 20)) return;
+        data.body[today] = Math.round(draft.value * 10) / 10;
+        saveData();
+        haptic('tap');
+        close();
+        transition(renderStats);
+        toast('Körpergewicht gespeichert: ' + formatWeight(data.body[today]) + ' kg');
+      });
+      body.appendChild(save);
+      if (has(data.body, today)) {
+        var del = btn('btn-secondary danger-text', 'Eintrag von heute löschen', 'trash');
+        del.addEventListener('click', function () {
+          delete data.body[today];
+          saveData();
+          close();
+          transition(renderStats);
+        });
+        body.appendChild(del);
+      }
+    });
+  }
+
+  $('bw-add').addEventListener('click', function () { haptic('tap'); openBodySheet(); });
+
   function renderCategoryBars(range) {
     var box = $('stats-cats');
     box.textContent = '';
@@ -2874,7 +3221,7 @@
       Object.keys(log).forEach(function (date) {
         if (date < range.since || date > range.until) return;
         var sets = log[date] || [];
-        counts[catOf(ex)] += mode === 'volume' ? (dayMetric(sets, 'volume') || 0) : sets.length;
+        counts[catOf(ex)] += mode === 'volume' ? (dayMetric(sets, 'volume') || 0) : working(sets).length;
       });
     });
     var keys = allCategories().map(function (c) { return c.key; });
@@ -2985,6 +3332,16 @@
     goal.appendChild(gRow);
     goal.appendChild(el('p', 'panel-sub', 'Einzelne Tage änderst du im Training über die Tageskarte.'));
 
+    // Fortschritt
+    var prog = $('settings-progress');
+    prog.textContent = '';
+    var pl = el('div', 'switch-list');
+    pl.appendChild(switchRow('Plateau-Hinweise', 'Meldet sich, wenn eine Übung seit 3 Einheiten nicht mehr steigt.', s.plateau, function (on) {
+      s.plateau = on;
+      saveData();
+    }));
+    prog.appendChild(pl);
+
     // Kategorien
     var cats = $('settings-cats');
     cats.textContent = '';
@@ -3015,7 +3372,7 @@
   $('data-export').addEventListener('click', function () {
     var backup = {
       exercises: data.exercises, logs: data.logs, categories: data.categories,
-      goals: data.goals, settings: data.settings, photos: photos
+      goals: data.goals, body: data.body, settings: data.settings, photos: photos
     };
     var blob = new Blob([JSON.stringify(backup, null, 2)], { type: 'application/json' });
     var a = document.createElement('a');
@@ -3046,9 +3403,11 @@
       }
       if (!confirm('Backup laden? Die aktuellen Daten auf diesem Gerät werden ersetzt.')) return;
       var keepSettings = !parsed.settings;
-      var oldSettings = data.settings;
+      var keepBody = !parsed.body;
+      var old = data;
       data = normalizeData(parsed);
-      if (keepSettings) data.settings = oldSettings;
+      if (keepSettings) data.settings = old.settings;
+      if (keepBody) data.body = old.body;
       saveData();
 
       // Backup mit Fotos ersetzt alle Fotos. Ältere Backups ohne Fotos
@@ -3314,7 +3673,7 @@
   window.addEventListener('resize', function () {
     clearTimeout(resizeTimer);
     resizeTimer = setTimeout(function () {
-      ['detail-chart', 'stats-chart', 'stats-weekly'].forEach(function (id) {
+      ['detail-chart', 'stats-chart', 'stats-weekly', 'stats-bw-chart'].forEach(function (id) {
         var cv = $(id);
         if (cv._chart && cv.offsetParent) paintChart(cv);
       });
