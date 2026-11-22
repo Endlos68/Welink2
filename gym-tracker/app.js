@@ -5,45 +5,121 @@
 
   var STORAGE_KEY = 'gym-tracker-v1';
   var UI_KEY = 'gym-tracker-ui';
+  var TIMER_KEY = 'gym-tracker-timer';
 
   function noop() {}
+  function clamp(v, lo, hi) { return Math.max(lo, Math.min(hi, v)); }
+  function has(obj, key) { return Object.prototype.hasOwnProperty.call(obj, key); }
 
   /* ================= Kategorien ================= */
 
-  var CATEGORIES = [
+  var BUILTIN_CATEGORIES = [
     { key: 'brust', label: 'Brust' },
     { key: 'arme', label: 'Arme' },
     { key: 'ruecken', label: 'Rücken' },
     { key: 'beine', label: 'Beine' },
     { key: 'bauch', label: 'Bauch' }
   ];
+  /* Farben für eigene Kategorien: Schlüssel auf CSS-Variablen --cc-* */
+  var CUSTOM_COLORS = ['orange', 'lime', 'himmel', 'indigo', 'magenta', 'rot', 'gold', 'stahl'];
   var NONE = 'none';
 
-  function isCategory(key) {
-    for (var i = 0; i < CATEGORIES.length; i++) if (CATEGORIES[i].key === key) return true;
+  function allCategories() { return BUILTIN_CATEGORIES.concat(data.categories); }
+  function findCategory(key) {
+    var list = allCategories();
+    for (var i = 0; i < list.length; i++) if (list[i].key === key) return list[i];
+    return null;
+  }
+  function isBuiltin(key) {
+    for (var i = 0; i < BUILTIN_CATEGORIES.length; i++) if (BUILTIN_CATEGORIES[i].key === key) return true;
     return false;
   }
+  function isCategory(key) { return !!findCategory(key); }
   function catOf(ex) { return isCategory(ex.category) ? ex.category : NONE; }
   function catLabel(key) {
-    for (var i = 0; i < CATEGORIES.length; i++) if (CATEGORIES[i].key === key) return CATEGORIES[i].label;
-    return 'Ohne Kategorie';
+    var c = findCategory(key);
+    return c ? c.label : 'Ohne Kategorie';
+  }
+  function catColor(key) {
+    if (isBuiltin(key)) return 'var(--cat-' + key + ')';
+    var c = findCategory(key);
+    return c ? 'var(--cc-' + c.color + ')' : 'var(--cat-none)';
+  }
+  /* Kategorie-Farbe an ein Element hängen (data-cat für Tests/CSS, --cat für die Farbe) */
+  function applyCat(node, key) {
+    node.dataset.cat = key;
+    node.style.setProperty('--cat', catColor(key));
+    return node;
   }
 
   /* ================= Daten ================= */
 
+  var REST_OPTIONS = [60, 90, 120, 150, 180, 240, 300];
+
   var data = loadData();
+
+  function cleanGoal(g) {
+    if (g === null) return null;
+    if (!g || typeof g !== 'object') return undefined;
+    if ((g.type === 'volume' || g.type === 'sets') && isFinite(g.value) && g.value > 0) return { type: g.type, value: +g.value };
+    return undefined;
+  }
+
+  /* Alte und neue Datenstände (auch Backups) auf ein gültiges Format bringen */
+  function normalizeData(p) {
+    var out = { exercises: [], logs: {}, categories: [], goals: {}, settings: {} };
+    if (Array.isArray(p.exercises)) {
+      out.exercises = p.exercises.filter(function (e) { return e && typeof e.id === 'string' && typeof e.name === 'string'; });
+    }
+    if (p.logs && typeof p.logs === 'object') out.logs = p.logs;
+    if (Array.isArray(p.categories)) {
+      var seen = {};
+      p.categories.forEach(function (c) {
+        if (!c || typeof c.key !== 'string' || typeof c.label !== 'string' || !c.label.trim()) return;
+        if (isBuiltin(c.key) || c.key === NONE || seen[c.key]) return;
+        seen[c.key] = true;
+        out.categories.push({
+          key: c.key,
+          label: c.label.trim().slice(0, 24),
+          color: CUSTOM_COLORS.indexOf(c.color) >= 0 ? c.color : CUSTOM_COLORS[0]
+        });
+      });
+    }
+    if (p.goals && typeof p.goals === 'object') {
+      Object.keys(p.goals).forEach(function (d) {
+        var g = cleanGoal(p.goals[d]);
+        if (g !== undefined && /^\d{4}-\d{2}-\d{2}$/.test(d)) out.goals[d] = g;
+      });
+    }
+    var s = p.settings && typeof p.settings === 'object' ? p.settings : {};
+    out.settings = {
+      restDefault: isFinite(s.restDefault) && s.restDefault > 0 ? clamp(Math.round(s.restDefault), 15, 900) : 120,
+      restAuto: s.restAuto !== false,
+      sound: s.sound !== false,
+      vibrate: s.vibrate !== false,
+      wakeLock: s.wakeLock !== false,
+      notify: s.notify === true,
+      goalDefault: cleanGoal(s.goalDefault) || null,
+      goalDefaultSince: typeof s.goalDefaultSince === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(s.goalDefaultSince) ? s.goalDefaultSince : null
+    };
+    if (out.settings.goalDefault && !out.settings.goalDefaultSince) out.settings.goalDefaultSince = toISO(new Date());
+    if (!out.settings.goalDefault) out.settings.goalDefaultSince = null;
+    return out;
+  }
+
+  function isBackupShape(p) {
+    return p && Array.isArray(p.exercises) && p.logs && typeof p.logs === 'object';
+  }
 
   function loadData() {
     try {
       var raw = localStorage.getItem(STORAGE_KEY);
       if (raw) {
         var parsed = JSON.parse(raw);
-        if (parsed && Array.isArray(parsed.exercises) && typeof parsed.logs === 'object') {
-          return { exercises: parsed.exercises, logs: parsed.logs || {} };
-        }
+        if (isBackupShape(parsed)) return normalizeData(parsed);
       }
     } catch (e) { /* korrupte Daten -> frisch starten */ }
-    return { exercises: [], logs: {} };
+    return normalizeData({});
   }
 
   function saveData() {
@@ -54,8 +130,8 @@
     }
   }
 
-  function uid() {
-    return 'ex-' + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 8);
+  function uid(prefix) {
+    return (prefix || 'ex') + '-' + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 8);
   }
 
   function getExercise(id) {
@@ -69,14 +145,17 @@
     try { return JSON.parse(localStorage.getItem(UI_KEY)) || {}; } catch (e) { return {}; }
   }
   function savePrefs() {
-    try { localStorage.setItem(UI_KEY, JSON.stringify({ filter: ui.filter })); } catch (e) { /* egal */ }
+    try {
+      localStorage.setItem(UI_KEY, JSON.stringify({ filter: ui.filter, statsRange: ui.statsRange, statsCatMode: ui.statsCatMode }));
+    } catch (e) { /* egal */ }
   }
 
-  /* ================= Datum ================= */
+  /* ================= Datum & Formate ================= */
 
   var WEEKDAYS = ['So', 'Mo', 'Di', 'Mi', 'Do', 'Fr', 'Sa'];
   var WEEKDAYS_LONG = ['Sonntag', 'Montag', 'Dienstag', 'Mittwoch', 'Donnerstag', 'Freitag', 'Samstag'];
   var MONTHS = ['Januar', 'Februar', 'März', 'April', 'Mai', 'Juni', 'Juli', 'August', 'September', 'Oktober', 'November', 'Dezember'];
+  var MONTHS_SHORT = ['Jan', 'Feb', 'Mär', 'Apr', 'Mai', 'Jun', 'Jul', 'Aug', 'Sep', 'Okt', 'Nov', 'Dez'];
 
   function toISO(d) {
     var m = String(d.getMonth() + 1).padStart(2, '0');
@@ -93,8 +172,20 @@
     d.setDate(d.getDate() + days);
     return toISO(d);
   }
-  function daysAgo(iso) {
-    return Math.round((parseISO(todayISO()) - parseISO(iso)) / 86400000);
+  function daysBetween(a, b) { return Math.round((parseISO(b) - parseISO(a)) / 86400000); }
+  function daysAgo(iso) { return daysBetween(iso, todayISO()); }
+  /* Montag der Woche */
+  function weekStartISO(iso) {
+    var d = parseISO(iso);
+    d.setDate(d.getDate() - (d.getDay() + 6) % 7);
+    return toISO(d);
+  }
+  /* Kalenderwoche nach ISO 8601 */
+  function isoWeek(iso) {
+    var d = parseISO(iso);
+    d.setDate(d.getDate() + 3 - (d.getDay() + 6) % 7);
+    var jan4 = new Date(d.getFullYear(), 0, 4);
+    return 1 + Math.round(((d - jan4) / 86400000 - 3 + (jan4.getDay() + 6) % 7) / 7);
   }
 
   function formatISO(iso, withYear) {
@@ -120,6 +211,30 @@
     else s = formatISO(iso, n > 300 || n < 0);
     return lower ? s.charAt(0).toLowerCase() + s.slice(1) : s;
   }
+  function formatClock(ms) {
+    var d = new Date(ms);
+    return String(d.getHours()).padStart(2, '0') + ':' + String(d.getMinutes()).padStart(2, '0');
+  }
+  function formatSecs(sec) {
+    sec = Math.max(0, Math.round(sec));
+    return Math.floor(sec / 60) + ':' + String(sec % 60).padStart(2, '0');
+  }
+  function formatMinutes(min) {
+    return min >= 60 ? Math.floor(min / 60) + ' h ' + (min % 60) + ' min' : min + ' min';
+  }
+
+  function formatNum(v, decimals) {
+    var d = decimals === undefined ? (v >= 100 || v === Math.round(v) ? 0 : 1) : decimals;
+    return v.toLocaleString('de-DE', { minimumFractionDigits: d, maximumFractionDigits: d });
+  }
+  function formatWeight(v) {
+    return v.toLocaleString('de-DE', { maximumFractionDigits: 2 });
+  }
+  function formatVolume(v) {
+    return v >= 10000 ? formatNum(v / 1000, 1) + ' t' : formatNum(v, 0) + ' kg';
+  }
+  function setText(s) { return formatWeight(s.weight) + ' kg × ' + s.reps; }
+  function plural(n, one, many) { return n + ' ' + (n === 1 ? one : many); }
 
   /* ================= Metriken ================= */
 
@@ -149,24 +264,25 @@
     return v;
   }
 
-  /* Zeitreihe einer Übung: [{date, value}], aufsteigend sortiert */
-  function exerciseSeries(exId, metric) {
+  /* Zeitreihe einer Übung: [{date, value}], aufsteigend, optional ab "since" */
+  function exerciseSeries(exId, metric, since) {
     var log = data.logs[exId] || {};
     var out = [];
     Object.keys(log).sort().forEach(function (date) {
+      if (since && date < since) return;
       var v = dayMetric(log[date], metric);
       if (v !== null && v > 0) out.push({ date: date, value: v });
     });
     return out;
   }
 
-  /* Globale Serie: pro Übung relativ zum Startwert (100 %), letzter bekannter
-     Wert wird fortgeschrieben, dann Durchschnitt über alle gestarteten Übungen. */
-  function globalSeries(metric) {
+  /* Globale Serie: pro Übung relativ zum ersten Wert im Zeitraum (100 %),
+     letzter bekannter Wert wird fortgeschrieben, Durchschnitt über alle Übungen. */
+  function globalSeries(metric, since) {
     var perEx = [];
     var dateSet = {};
     data.exercises.forEach(function (ex) {
-      var s = exerciseSeries(ex.id, metric);
+      var s = exerciseSeries(ex.id, metric, since);
       if (s.length) {
         perEx.push(s);
         s.forEach(function (pt) { dateSet[pt.date] = true; });
@@ -188,24 +304,34 @@
     return out;
   }
 
-  /* Bestwerte: ein Satz, dessen geschätztes 1RM alle früheren Sätze übertrifft.
-     Erst ab dem zweiten Trainingstag, damit der Start nicht voller Rekorde ist.
-     Ergebnis: { 'YYYY-MM-DD': { setIndex: true } } */
-  function computePRs(exId) {
+  /* Rekorde einer Übung.
+     'weight': schwerer als jedes Gewicht davor, mind. 1 Wdh. (das feiern wir)
+     'best':   kein neues Gewicht, aber bestes geschätztes 1RM (z. B. mehr Wdh.)
+     Erst ab dem zweiten Trainingstag, damit der Start nicht voller Rekorde ist. */
+  function computeRecords(exId) {
     var log = data.logs[exId] || {};
-    var out = {};
-    var best = 0, hasPrior = false;
+    var marks = {};
+    var events = [];
+    var maxW = 0, maxE = 0, hasPrior = false, record = null;
     Object.keys(log).sort().forEach(function (date) {
       var sets = log[date] || [];
-      var running = best;
       sets.forEach(function (s, i) {
         var e = epley(s.weight, s.reps);
-        if (hasPrior && e > running + 1e-9) (out[date] = out[date] || {})[i] = true;
-        if (e > running) running = e;
+        if (hasPrior && s.weight > maxW + 1e-9) {
+          (marks[date] = marks[date] || {})[i] = 'weight';
+          events.push({ exId: exId, date: date, index: i, weight: s.weight, reps: s.reps, prev: maxW });
+        } else if (hasPrior && e > maxE + 1e-9) {
+          (marks[date] = marks[date] || {})[i] = 'best';
+        }
+        if (!record || s.weight > record.weight || (s.weight === record.weight && s.reps > record.reps)) {
+          record = { weight: s.weight, reps: s.reps, date: date };
+        }
+        if (s.weight > maxW) maxW = s.weight;
+        if (e > maxE) maxE = e;
       });
-      if (sets.length) { best = running; hasPrior = true; }
+      if (sets.length) hasPrior = true;
     });
-    return out;
+    return { marks: marks, events: events, record: record, bestE1rm: maxE };
   }
 
   function lastSession(exId, beforeISO) {
@@ -230,29 +356,69 @@
     return best;
   }
 
-  function formatNum(v, decimals) {
-    var d = decimals === undefined ? (v >= 100 || v === Math.round(v) ? 0 : 1) : decimals;
-    return v.toLocaleString('de-DE', { minimumFractionDigits: d, maximumFractionDigits: d });
+  /* Tagesbilanz über alle Übungen; Dauer aus den Zeitstempeln der Sätze */
+  function daySummary(date) {
+    var sets = 0, volume = 0, exercises = 0, tMin = Infinity, tMax = -Infinity, nt = 0;
+    data.exercises.forEach(function (ex) {
+      var day = (data.logs[ex.id] || {})[date];
+      if (!day || !day.length) return;
+      exercises++;
+      day.forEach(function (s) {
+        sets++;
+        volume += s.weight * s.reps;
+        if (s.t) { nt++; tMin = Math.min(tMin, s.t); tMax = Math.max(tMax, s.t); }
+      });
+    });
+    return { sets: sets, volume: volume, exercises: exercises, minutes: nt >= 2 ? Math.max(1, Math.round((tMax - tMin) / 60000)) : null };
   }
-  function formatWeight(v) {
-    return v.toLocaleString('de-DE', { maximumFractionDigits: 2 });
+
+  /* ================= Tagesziel ================= */
+
+  /* Tagesziel eines Tages: eigenes Ziel, sonst der Standard (erst ab dem Tag,
+     an dem er festgelegt wurde, damit alte Tage nicht nachträglich zählen) */
+  function goalFor(date) {
+    if (has(data.goals, date)) return data.goals[date];
+    var s = data.settings;
+    if (s.goalDefault && (!s.goalDefaultSince || date >= s.goalDefaultSince)) return s.goalDefault;
+    return null;
   }
-  function setText(s) { return formatWeight(s.weight) + ' kg × ' + s.reps; }
+  function setDefaultGoal(g) {
+    var s = data.settings;
+    if (!g) { s.goalDefault = null; s.goalDefaultSince = null; return; }
+    if (!s.goalDefault || !s.goalDefaultSince || s.goalDefaultSince > todayISO()) s.goalDefaultSince = todayISO();
+    s.goalDefault = g;
+  }
+  function goalProgress(date, sum) {
+    var g = goalFor(date);
+    if (!g) return null;
+    sum = sum || daySummary(date);
+    var cur = g.type === 'volume' ? sum.volume : sum.sets;
+    return { goal: g, current: cur, ratio: g.value ? cur / g.value : 0, done: cur >= g.value };
+  }
+  function goalValueText(type, v) { return type === 'volume' ? formatNum(v, 0) : String(Math.round(v)); }
+  function goalUnit(type) { return type === 'volume' ? 'kg' : 'Sätze'; }
+  function goalText(g) {
+    if (!g) return 'Kein Ziel';
+    return goalValueText(g.type, g.value) + ' ' + (g.type === 'volume' ? 'kg Volumen' : 'Sätze');
+  }
 
   /* ================= UI-State ================= */
 
   var prefs = loadPrefs();
   var ui = {
-    view: 'training',          // training | exercises | exerciseDetail | stats
+    view: 'training',          // training | exercises | exerciseDetail | stats | settings
     date: todayISO(),
     filter: (prefs.filter === NONE || isCategory(prefs.filter)) ? prefs.filter : 'all',
     openId: null,              // aufgeklappte Übung im Training
     draft: null,               // {exId, date, weight, reps}
     editing: null,             // {exId, date, index}
     flash: null,               // frisch eingetragener Satz {exId, date, index}
+    goalAnimFrom: null,        // Fortschrittsbalken: alter Stand für die Animation
     detailId: null,
     detailMetric: 'top',
     statsMetric: 'top',
+    statsRange: ['4w', '3m', '1y', 'all'].indexOf(prefs.statsRange) >= 0 ? prefs.statsRange : '3m',
+    statsCatMode: prefs.statsCatMode === 'volume' ? 'volume' : 'sets',
     renaming: false,
     newCategory: null,         // Auswahl im Anlegen-Formular
     newId: null                // frisch angelegte Übung (kurz hervorheben)
@@ -289,6 +455,22 @@
     return b;
   }
 
+  /* Ein-/Aus-Schalter als Zeile */
+  function switchRow(label, sub, checked, onChange) {
+    var row = el('label', 'switch-row');
+    var text = el('span', 'switch-text');
+    text.appendChild(el('span', null, label));
+    if (sub) text.appendChild(el('small', null, sub));
+    var input = el('input', 'switch');
+    input.type = 'checkbox';
+    input.setAttribute('role', 'switch');
+    input.checked = !!checked;
+    input.addEventListener('change', function () { haptic('tick'); onChange(input.checked, input); });
+    row.appendChild(text);
+    row.appendChild(input);
+    return row;
+  }
+
   /* ================= Bewegung ================= */
 
   var reduceMotion = window.matchMedia ? window.matchMedia('(prefers-reduced-motion: reduce)') : { matches: false };
@@ -306,7 +488,7 @@
     vt.finished.then(done, done);
   }
 
-  /* kind: Art des Wechsels für das CSS (nav | push | pop), sonst Überblenden */
+  /* kind: Art des Wechsels für das CSS (nav | push | pop | list), sonst Überblenden */
   function startVT(update, kind) {
     var root = document.documentElement;
     if (kind) root.dataset.vt = kind; else delete root.dataset.vt;
@@ -369,10 +551,16 @@
     return label;
   })();
 
+  /* Vibration erst nach einer Berührung (sonst blockiert der Browser) */
+  function canVibrate() {
+    return !!navigator.vibrate && (!navigator.userActivation || navigator.userActivation.hasBeenActive);
+  }
+
   function haptic(kind) {
     try {
       if (navigator.vibrate) {
-        navigator.vibrate(kind === 'success' ? [16, 60, 24] : kind === 'tap' ? 10 : 6);
+        if (!canVibrate()) return;
+        navigator.vibrate(kind === 'record' ? [20, 60, 20, 60, 40] : kind === 'success' ? [16, 60, 24] : kind === 'tap' ? 10 : 6);
         return;
       }
       if (!coarsePointer.matches) return;
@@ -382,14 +570,156 @@
     } catch (e) { /* ohne Haptik weiter */ }
   }
 
+  /* ================= Ton ================= */
+
+  var Sound = (function () {
+    var ctx = null;
+    function unlock() {
+      try {
+        var AC = window.AudioContext || window.webkitAudioContext;
+        if (!AC) return;
+        // Musik nur kurz absenken statt anhalten (Safari)
+        if (navigator.audioSession) navigator.audioSession.type = 'transient';
+        if (!ctx) ctx = new AC();
+        if (ctx.state === 'suspended') ctx.resume();
+      } catch (e) { /* ohne Ton weiter */ }
+    }
+    function tones(list, gap) {
+      if (!ctx || ctx.state !== 'running') return;
+      try {
+        var t0 = ctx.currentTime + 0.02;
+        list.forEach(function (f, i) {
+          var o = ctx.createOscillator();
+          var g = ctx.createGain();
+          var t = t0 + i * (gap || 0.2);
+          o.type = 'sine';
+          o.frequency.value = f;
+          g.gain.setValueAtTime(0.0001, t);
+          g.gain.exponentialRampToValueAtTime(0.32, t + 0.015);
+          g.gain.exponentialRampToValueAtTime(0.0001, t + 0.18);
+          o.connect(g);
+          g.connect(ctx.destination);
+          o.start(t);
+          o.stop(t + 0.2);
+        });
+      } catch (e) { /* egal */ }
+    }
+    return {
+      unlock: unlock,
+      chime: function () { tones([880, 880, 1320], 0.24); },
+      record: function () { tones([660, 880, 1320], 0.12); }
+    };
+  })();
+
+  document.addEventListener('pointerdown', function () { if (data.settings.sound) Sound.unlock(); }, { passive: true });
+
+  /* ================= Konfetti =================
+     Kurzer Partikel-Burst für Rekorde und erreichte Tagesziele.
+     Bei "Bewegung reduzieren" gibt es stattdessen nur Badge und Hinweis. */
+
+  var Confetti = (function () {
+    var canvas = null, ctx = null, parts = [], raf = null, last = 0, W = 0, H = 0;
+    var COLORS = ['#72d88b', '#9ce5ad', '#ec7c99', '#f0ba59', '#67aaed', '#b191ea', '#62cfce', '#f0f5f2'];
+
+    function ensure() {
+      if (canvas) return;
+      canvas = el('canvas', 'confetti');
+      canvas.setAttribute('aria-hidden', 'true');
+      document.body.appendChild(canvas);
+      ctx = canvas.getContext('2d');
+      size();
+      window.addEventListener('resize', size);
+    }
+    function size() {
+      if (!canvas) return;
+      var dpr = window.devicePixelRatio || 1;
+      W = window.innerWidth;
+      H = window.innerHeight;
+      canvas.width = Math.round(W * dpr);
+      canvas.height = Math.round(H * dpr);
+      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    }
+    function burst(x, y, opts) {
+      if (reduceMotion.matches) return;
+      opts = opts || {};
+      ensure();
+      var n = opts.count || 90;
+      var angle = opts.angle === undefined ? -Math.PI / 2 : opts.angle;
+      var spread = opts.spread || 1.3;
+      var power = opts.power || 1;
+      for (var i = 0; i < n; i++) {
+        var a = angle + (Math.random() - 0.5) * spread;
+        var v = (520 + Math.random() * 520) * power;
+        parts.push({
+          x: x, y: y,
+          vx: Math.cos(a) * v, vy: Math.sin(a) * v,
+          w: 5 + Math.random() * 5, h: 8 + Math.random() * 7,
+          rot: Math.random() * Math.PI * 2, vr: (Math.random() - 0.5) * 14,
+          flip: Math.random() * Math.PI * 2, vf: 6 + Math.random() * 10,
+          color: COLORS[(Math.random() * COLORS.length) | 0],
+          round: Math.random() < 0.25,
+          life: 0, ttl: 1.5 + Math.random() * 0.9
+        });
+      }
+      if (!raf) { last = performance.now(); raf = requestAnimationFrame(frame); }
+    }
+    function frame(ts) {
+      var dt = Math.min(0.033, (ts - last) / 1000);
+      last = ts;
+      ctx.clearRect(0, 0, W, H);
+      for (var i = parts.length - 1; i >= 0; i--) {
+        var p = parts[i];
+        p.life += dt;
+        p.vx *= 1 - 1.6 * dt;
+        p.vy = p.vy * (1 - 1.1 * dt) + 1500 * dt;
+        p.x += p.vx * dt;
+        p.y += p.vy * dt;
+        p.rot += p.vr * dt;
+        p.flip += p.vf * dt;
+        if (p.life > p.ttl || p.y > H + 40) { parts.splice(i, 1); continue; }
+        var fade = p.life > p.ttl * 0.7 ? 1 - (p.life - p.ttl * 0.7) / (p.ttl * 0.3) : 1;
+        ctx.save();
+        ctx.globalAlpha = Math.max(0, fade);
+        ctx.translate(p.x, p.y);
+        ctx.rotate(p.rot);
+        ctx.scale(1, Math.cos(p.flip));
+        ctx.fillStyle = p.color;
+        if (p.round) {
+          ctx.beginPath();
+          ctx.arc(0, 0, p.w / 2, 0, Math.PI * 2);
+          ctx.fill();
+        } else {
+          ctx.fillRect(-p.w / 2, -p.h / 2, p.w, p.h);
+        }
+        ctx.restore();
+      }
+      if (parts.length) raf = requestAnimationFrame(frame);
+      else { raf = null; ctx.clearRect(0, 0, W, H); }
+    }
+    function fromElement(node, opts) {
+      var r = node && node.getBoundingClientRect ? node.getBoundingClientRect() : null;
+      var x = r ? r.left + r.width / 2 : window.innerWidth / 2;
+      var y = r ? r.top + r.height / 2 : window.innerHeight / 2;
+      burst(x, y, opts);
+    }
+    /* Großer Moment: Mitte plus zwei seitliche "Kanonen" */
+    function celebrate(node) {
+      fromElement(node, { count: 110, spread: 1.6, power: 1.05 });
+      burst(0, window.innerHeight * 0.72, { count: 45, angle: -Math.PI / 3, spread: 0.5, power: 1.25 });
+      burst(window.innerWidth, window.innerHeight * 0.72, { count: 45, angle: -Math.PI * 2 / 3, spread: 0.5, power: 1.25 });
+    }
+    return { burst: burst, fromElement: fromElement, celebrate: celebrate };
+  })();
+
   /* ================= Hinweis-Leiste (Toast) ================= */
 
   var toastTimer = null;
 
-  function toast(text, actionLabel, onAction) {
+  function toast(text, actionLabel, onAction, variant) {
     var t = $('toast');
     var action = $('toast-action');
     clearTimeout(toastTimer);
+    t.classList.toggle('is-record', variant === 'record');
     t.classList.add('show');
     $('toast-text').textContent = text;
     action.hidden = !actionLabel;
@@ -398,12 +728,48 @@
       hideToast();
       if (onAction) onAction();
     };
-    toastTimer = setTimeout(hideToast, actionLabel ? 6000 : 2800);
+    toastTimer = setTimeout(hideToast, actionLabel ? 6000 : variant === 'record' ? 4200 : 2800);
   }
 
   function hideToast() {
     clearTimeout(toastTimer);
     $('toast').classList.remove('show');
+  }
+
+  /* ================= Bottom Sheet ================= */
+
+  var sheet = $('sheet');
+
+  function openSheet(title, build) {
+    var body = $('sheet-body');
+    body.textContent = '';
+    $('sheet-title').textContent = title;
+    build(body, closeSheet);
+    if (!sheet.open) {
+      if (sheet.showModal) sheet.showModal(); else sheet.setAttribute('open', '');
+    }
+    var first = body.querySelector('input[type="text"], [aria-pressed="true"], [aria-checked="true"], button');
+    if (first) first.focus({ preventScroll: true });
+  }
+
+  function closeSheet() {
+    if (!sheet.open) return;
+    if (sheet.close) sheet.close(); else sheet.removeAttribute('open');
+  }
+
+  sheet.addEventListener('click', function (e) { if (e.target === sheet) closeSheet(); });
+  $('sheet-close').addEventListener('click', closeSheet);
+
+  /* Auswahl-Chips (z. B. Pausendauer, Zielvorgaben) */
+  function chipRow(options, isActive, onPick, className) {
+    var row = el('div', className || 'chip-row');
+    options.forEach(function (o) {
+      var b = btn('opt-chip', o.label);
+      b.setAttribute('aria-pressed', String(isActive(o)));
+      b.addEventListener('click', function () { haptic('tick'); onPick(o, b); });
+      row.appendChild(b);
+    });
+    return row;
   }
 
   /* ================= Fotos (IndexedDB) =================
@@ -621,6 +987,191 @@
     if (e.key === 'Escape') closeLightbox();
   });
 
+  /* ================= Pausentimer =================
+     Läuft über Zeitstempel (endAt), damit er auch nach App-Wechsel oder
+     gesperrtem Bildschirm stimmt. Ton/Vibration nur, solange die App offen ist;
+     Benachrichtigungen im Hintergrund, wo das Betriebssystem es zulässt. */
+
+  var RING = 2 * Math.PI * 19;
+  var timer = loadTimer();
+  var timerInterval = null;
+  var timerTimeout = null;
+
+  function loadTimer() {
+    try {
+      var t = JSON.parse(localStorage.getItem(TIMER_KEY));
+      if (t && isFinite(t.endAt) && isFinite(t.duration) && Date.now() - t.endAt < 5 * 60000) return t;
+    } catch (e) { /* egal */ }
+    return null;
+  }
+  function saveTimer() {
+    try {
+      if (timer) localStorage.setItem(TIMER_KEY, JSON.stringify(timer));
+      else localStorage.removeItem(TIMER_KEY);
+    } catch (e) { /* egal */ }
+  }
+
+  /* Pause für eine Übung: eigene Einstellung, sonst Standard; 0 = keine Pause */
+  function restFor(ex) {
+    if (ex && ex.rest === 0) return 0;
+    if (ex && isFinite(ex.rest) && ex.rest > 0) return ex.rest;
+    return data.settings.restDefault;
+  }
+
+  function startRest(exId, setNo, seconds) {
+    var now = Date.now();
+    timer = { exId: exId, setNo: setNo, duration: seconds, startAt: now, endAt: now + seconds * 1000, alerted: false };
+    saveTimer();
+    if (data.settings.sound) Sound.unlock();
+    WakeLock.update();
+    scheduleTimer();
+    updateDock();
+  }
+
+  function setRestDuration(seconds) {
+    if (!timer) return;
+    timer.duration = seconds;
+    timer.endAt = timer.startAt + seconds * 1000;
+    if (timer.endAt > Date.now()) timer.alerted = false;
+    saveTimer();
+    scheduleTimer();
+    updateDock();
+  }
+
+  function adjustRest(delta) {
+    if (!timer) return;
+    var now = Date.now();
+    timer.endAt = Math.max(now, timer.endAt + delta * 1000);
+    timer.duration = Math.max(1, (timer.endAt - timer.startAt) / 1000);
+    if (timer.endAt > now) timer.alerted = false;
+    saveTimer();
+    scheduleTimer();
+    updateDock();
+  }
+
+  function stopRest() {
+    timer = null;
+    saveTimer();
+    clearInterval(timerInterval);
+    clearTimeout(timerTimeout);
+    WakeLock.update();
+    updateDock();
+  }
+
+  function scheduleTimer() {
+    clearInterval(timerInterval);
+    clearTimeout(timerTimeout);
+    if (!timer) return;
+    timerInterval = setInterval(updateDock, 250);
+    var ms = timer.endAt - Date.now();
+    if (ms > 0 && !timer.alerted) timerTimeout = setTimeout(updateDock, ms + 30);
+  }
+
+  function updateDock() {
+    var dock = $('rest-dock');
+    document.body.classList.toggle('has-dock', !!timer);
+    if (!timer) { dock.hidden = true; return; }
+    var now = Date.now();
+    var left = timer.endAt - now;
+    if (left <= 0 && !timer.alerted) {
+      timer.alerted = true;
+      saveTimer();
+      restAlert(-left);
+    }
+    if (left < -5 * 60000) { stopRest(); return; }
+
+    var done = left <= 0;
+    dock.hidden = false;
+    dock.classList.toggle('is-done', done);
+    var ex = getExercise(timer.exId);
+    $('rest-time').textContent = done ? '+' + formatSecs(-left / 1000) : formatSecs(Math.ceil(left / 1000));
+    $('rest-sub').textContent = done
+      ? 'Jetzt Satz ' + timer.setNo + (ex ? ' · ' + ex.name : '')
+      : 'Satz ' + timer.setNo + ' um ' + formatClock(timer.endAt) + (ex ? ' · ' + ex.name : '');
+    var ratio = done ? 1 : clamp(1 - left / (timer.duration * 1000), 0, 1);
+    var bar = $('rest-bar');
+    bar.style.strokeDasharray = RING.toFixed(2);
+    bar.style.strokeDashoffset = (RING * ratio).toFixed(2);
+    $('rest-minus').hidden = done;
+    $('rest-plus').hidden = done;
+    $('rest-close').setAttribute('aria-label', done ? 'Pause schließen' : 'Pause beenden');
+  }
+
+  function restAlert(lateMs) {
+    var ex = getExercise(timer.exId);
+    var what = (ex ? ex.name + ', ' : '') + 'Satz ' + timer.setNo;
+    $('rest-live').textContent = 'Pause vorbei. Weiter mit ' + what + '.';
+    if (document.hidden) notify('Pause vorbei', 'Weiter mit ' + what);
+    if (lateMs > 4000) return;   // nicht nachträglich lärmen
+    if (data.settings.vibrate && canVibrate()) {
+      try { navigator.vibrate([220, 90, 220, 90, 320]); } catch (e) { /* egal */ }
+    }
+    if (data.settings.sound) Sound.chime();
+  }
+
+  function notify(title, body) {
+    if (!data.settings.notify || !('Notification' in window) || Notification.permission !== 'granted') return;
+    var opts = { body: body, tag: 'rest', renotify: true, icon: 'icon.svg', vibrate: [220, 90, 220] };
+    if (navigator.serviceWorker && navigator.serviceWorker.controller) {
+      navigator.serviceWorker.ready.then(function (reg) { return reg.showNotification(title, opts); }).catch(noop);
+    } else {
+      try { new Notification(title, opts); } catch (e) { /* egal */ }
+    }
+  }
+
+  /* Bildschirm während der Pause anlassen (Screen Wake Lock) */
+  var WakeLock = (function () {
+    var sentinel = null, pending = false;
+    var supported = 'wakeLock' in navigator;
+    function want() { return supported && !!timer && data.settings.wakeLock && !document.hidden; }
+    function release() {
+      if (sentinel) { try { sentinel.release(); } catch (e) { /* egal */ } sentinel = null; }
+    }
+    function update() {
+      if (!want()) { release(); return; }
+      if (sentinel || pending) return;
+      pending = true;
+      navigator.wakeLock.request('screen').then(function (s) {
+        pending = false;
+        sentinel = s;
+        s.addEventListener('release', function () { if (sentinel === s) sentinel = null; });
+        if (!want()) release();
+      }).catch(function () { pending = false; });
+    }
+    return { update: update, supported: supported };
+  })();
+
+  $('rest-minus').addEventListener('click', function () { haptic('tick'); adjustRest(-15); });
+  $('rest-plus').addEventListener('click', function () { haptic('tick'); adjustRest(15); });
+  $('rest-close').addEventListener('click', function () { haptic('tap'); stopRest(); });
+  $('rest-main').addEventListener('click', function () {
+    if (!timer) return;
+    var ex = getExercise(timer.exId);
+    if (timer.endAt <= Date.now()) { haptic('tap'); stopRest(); return; }
+    if (ex) openRestSheet(ex);
+  });
+
+  /* Auswahl der Pausendauer für eine Übung */
+  function openRestSheet(ex) {
+    openSheet('Pause nach jedem Satz', function (body, close) {
+      body.appendChild(el('p', 'sheet-sub', ex.name));
+      var options = [{ v: null, label: 'Standard (' + formatSecs(data.settings.restDefault) + ')' }]
+        .concat(REST_OPTIONS.map(function (s) { return { v: s, label: formatSecs(s) }; }))
+        .concat([{ v: 0, label: 'Keine Pause' }]);
+      var current = ex.rest === 0 ? 0 : (isFinite(ex.rest) && ex.rest > 0 ? ex.rest : null);
+      body.appendChild(chipRow(options, function (o) { return o.v === current; }, function (o) {
+        if (o.v === null) delete ex.rest; else ex.rest = o.v;
+        saveData();
+        if (timer && timer.exId === ex.id) {
+          var sec = restFor(ex);
+          if (sec > 0) setRestDuration(sec); else stopRest();
+        }
+        close();
+        transition(render);
+      }, 'chip-row chip-grid'));
+    });
+  }
+
   /* ================= Kopfzeile & Filter ================= */
 
   function renderHeader() {
@@ -672,8 +1223,10 @@
       acts.appendChild(rename);
       acts.appendChild(del);
       main.appendChild(acts);
-    } else {
+    } else if (ui.view === 'stats') {
       main.appendChild(el('h1', 'title', 'Statistik'));
+    } else {
+      main.appendChild(el('h1', 'title', 'Einstellungen'));
     }
 
     var showFilter = (ui.view === 'training' || ui.view === 'exercises') && data.exercises.length > 0;
@@ -684,28 +1237,31 @@
   function categoryCounts() {
     var counts = { all: data.exercises.length };
     counts[NONE] = 0;
-    CATEGORIES.forEach(function (c) { counts[c.key] = 0; });
+    allCategories().forEach(function (c) { counts[c.key] = 0; });
     data.exercises.forEach(function (ex) { counts[catOf(ex)]++; });
     return counts;
   }
 
   function renderFilterBar() {
     var bar = $('filter-bar');
+    var oldSeg = bar.querySelector('.seg-cats');
+    var scrollLeft = oldSeg ? oldSeg.scrollLeft : 0;
     bar.textContent = '';
     var seg = el('div', 'seg-cats');
     bar.appendChild(seg);
     var counts = categoryCounts();
     if (ui.filter === NONE && !counts[NONE]) ui.filter = 'all';
+    if (ui.filter !== 'all' && ui.filter !== NONE && !isCategory(ui.filter)) ui.filter = 'all';
 
-    var items = [{ key: 'all', label: 'Alle' }].concat(CATEGORIES);
+    var items = [{ key: 'all', label: 'Alle' }].concat(allCategories());
     if (counts[NONE]) items.push({ key: NONE, label: 'Ohne' });
 
     items.forEach(function (it) {
       var chip = btn('chip');
-      if (it.key !== 'all') chip.dataset.cat = it.key;
+      if (it.key !== 'all') applyCat(chip, it.key);
       chip.appendChild(el('span', 'chip-dot' + (it.key === 'all' ? ' all' : '')));
       chip.appendChild(el('span', 'chip-label', it.label));
-      chip.setAttribute('aria-label', it.label + ', ' + (counts[it.key] || 0) + (counts[it.key] === 1 ? ' Übung' : ' Übungen'));
+      chip.setAttribute('aria-label', it.label + ', ' + plural(counts[it.key] || 0, 'Übung', 'Übungen'));
       chip.setAttribute('aria-pressed', String(ui.filter === it.key));
       chip.addEventListener('click', function () {
         if (ui.filter === it.key) return;
@@ -714,6 +1270,17 @@
       });
       seg.appendChild(chip);
     });
+
+    // Viele eigene Kategorien: Leiste scrollt, aktiver Chip bleibt sichtbar
+    seg.scrollLeft = scrollLeft;
+    seg.classList.toggle('is-scrollable', seg.scrollWidth > seg.clientWidth + 1);
+    var active = seg.querySelector('[aria-pressed="true"]');
+    if (active && seg.scrollWidth > seg.clientWidth + 1) {
+      var left = active.offsetLeft - 12;
+      var right = active.offsetLeft + active.offsetWidth + 12 - seg.clientWidth;
+      if (seg.scrollLeft > left) seg.scrollLeft = left;
+      else if (seg.scrollLeft < right) seg.scrollLeft = right;
+    }
   }
 
   function setFilter(key) {
@@ -732,7 +1299,7 @@
 
   /* Gruppen in fester Kategorie-Reihenfolge, "Ohne Kategorie" zuletzt */
   function groupByCategory(list) {
-    var groups = CATEGORIES.map(function (c) { return { key: c.key, label: c.label, items: [] }; });
+    var groups = allCategories().map(function (c) { return { key: c.key, label: c.label, items: [] }; });
     groups.push({ key: NONE, label: 'Ohne Kategorie', items: [] });
     var byKey = {};
     groups.forEach(function (g) { byKey[g.key] = g; });
@@ -741,8 +1308,7 @@
   }
 
   function groupHead(g) {
-    var h = el('h2', 'group-head');
-    h.dataset.cat = g.key;
+    var h = applyCat(el('h2', 'group-head'), g.key);
     h.appendChild(el('span', 'chip-dot'));
     h.appendChild(el('span', null, g.label));
     h.appendChild(el('span', 'count', String(g.items.length)));
@@ -793,7 +1359,13 @@
 
   /* ================= Navigation ================= */
 
-  var VIEW_IDS = { training: 'view-training', exercises: 'view-exercises', exerciseDetail: 'view-exercise-detail', stats: 'view-stats' };
+  var VIEW_IDS = {
+    training: 'view-training',
+    exercises: 'view-exercises',
+    exerciseDetail: 'view-exercise-detail',
+    stats: 'view-stats',
+    settings: 'view-settings'
+  };
 
   function applyView(view) {
     ui.view = view;
@@ -825,12 +1397,14 @@
     if (ui.view === 'training') renderTraining();
     else if (ui.view === 'exercises') renderExercises();
     else if (ui.view === 'exerciseDetail') renderDetail();
-    else renderStats();
+    else if (ui.view === 'stats') renderStats();
+    else renderSettings();
   }
 
   function render() {
     renderHeader();
     renderView();
+    updateDock();
   }
 
   /* Schatten unter der Kopfzeile, sobald gescrollt wird */
@@ -871,6 +1445,8 @@
       return;
     }
 
+    list.appendChild(buildDayCard());
+
     var items = data.exercises.filter(matchesFilter);
     if (!items.length) {
       var label = catLabel(ui.filter);
@@ -884,11 +1460,77 @@
     renderGrouped(list, items, buildTrainingItem, 'ex-stack');
   }
 
+  /* Tageskarte: Tagesziel mit Fortschritt, Sätze, Übungen, Dauer */
+  function buildDayCard() {
+    var sum = daySummary(ui.date);
+    var prog = goalProgress(ui.date, sum);
+    var isToday = ui.date === todayISO();
+    var card = el('section', 'day-card' + (prog && prog.done ? ' is-done' : ''));
+    card.setAttribute('aria-label', 'Tagesübersicht');
+
+    var top = el('div', 'day-top');
+    var main = el('div', 'day-main');
+    if (prog) {
+      var label = el('span', 'day-label');
+      label.appendChild(icon(prog.done ? 'check' : 'target'));
+      label.appendChild(document.createTextNode(prog.done ? 'Tagesziel erreicht' : 'Tagesziel'));
+      main.appendChild(label);
+      var line = el('p', 'day-goal');
+      line.appendChild(el('b', null, goalValueText(prog.goal.type, prog.current)));
+      line.appendChild(el('span', 'of', ' / ' + goalValueText(prog.goal.type, prog.goal.value) + ' ' + goalUnit(prog.goal.type)));
+      main.appendChild(line);
+    } else {
+      main.appendChild(el('span', 'day-label', isToday ? 'Heute' : 'An diesem Tag'));
+      main.appendChild(el('p', 'day-goal', sum.sets ? formatNum(sum.volume, 0) + ' kg Volumen' : 'Noch kein Satz'));
+    }
+    top.appendChild(main);
+    var edit = btn('btn-chip', prog ? 'Ziel ändern' : 'Tagesziel setzen', 'target');
+    edit.addEventListener('click', function () { openGoalSheet(ui.date); });
+    top.appendChild(edit);
+    card.appendChild(top);
+
+    if (prog) {
+      var track = el('div', 'goal-track');
+      track.setAttribute('role', 'progressbar');
+      track.setAttribute('aria-label', 'Fortschritt Tagesziel');
+      track.setAttribute('aria-valuemin', '0');
+      track.setAttribute('aria-valuemax', String(prog.goal.value));
+      track.setAttribute('aria-valuenow', String(Math.round(prog.current)));
+      var fill = el('div', 'goal-fill');
+      var target = Math.min(1, prog.ratio);
+      var from = ui.goalAnimFrom;
+      ui.goalAnimFrom = null;
+      if (from !== null && from !== target && !reduceMotion.matches) {
+        fill.style.transform = 'scaleX(' + from + ')';
+        requestAnimationFrame(function () {
+          requestAnimationFrame(function () { fill.style.transform = 'scaleX(' + target + ')'; });
+        });
+      } else {
+        fill.style.transform = 'scaleX(' + target + ')';
+      }
+      track.appendChild(fill);
+      card.appendChild(track);
+    }
+
+    var parts = [];
+    if (sum.sets) {
+      parts.push(plural(sum.sets, 'Satz', 'Sätze'));
+      parts.push(plural(sum.exercises, 'Übung', 'Übungen'));
+      if (prog && prog.goal.type === 'sets') parts.push(formatNum(sum.volume, 0) + ' kg');
+      if (sum.minutes !== null) parts.push(formatMinutes(sum.minutes));
+    }
+    if (prog && !prog.done) {
+      parts.push('noch ' + goalValueText(prog.goal.type, prog.goal.value - prog.current) + ' ' + goalUnit(prog.goal.type));
+    }
+    if (parts.length) card.appendChild(el('p', 'day-stats', parts.join(' · ')));
+    return card;
+  }
+
   function trainingMeta(ex, sets) {
     var meta = el('span', 'ex-meta');
     if (sets.length) {
       var top = topSet(sets);
-      meta.textContent = sets.length + (sets.length === 1 ? ' Satz' : ' Sätze') + ' · Top ' + formatWeight(top.weight) + ' kg';
+      meta.textContent = plural(sets.length, 'Satz', 'Sätze') + ' · Top ' + formatWeight(top.weight) + ' kg';
       return meta;
     }
     var last = lastSession(ex.id, ui.date);
@@ -907,7 +1549,7 @@
     var open = ui.openId === ex.id;
 
     var item = el('article', 'ex' + (open ? ' is-open' : ''));
-    item.dataset.cat = catOf(ex);
+    applyCat(item, catOf(ex));
     item.dataset.id = ex.id;
     item.style.viewTransitionName = vtName('tr', ex.id);
 
@@ -927,7 +1569,7 @@
       var pill = el('span', 'done-pill');
       pill.appendChild(icon('check'));
       pill.appendChild(el('span', null, String(sets.length)));
-      pill.setAttribute('aria-label', sets.length + (sets.length === 1 ? ' Satz' : ' Sätze') + ' erledigt');
+      pill.setAttribute('aria-label', plural(sets.length, 'Satz', 'Sätze') + ' erledigt');
       status.appendChild(pill);
     }
     status.appendChild(icon('chevron-down', 'chev'));
@@ -982,29 +1624,54 @@
     return isFinite(w) && w > 0 && isFinite(r) && r > 0 && r === Math.round(r);
   }
 
+  function recordBadge(kind) {
+    var badge = el('span', 'badge-pr ' + (kind === 'weight' ? 'is-record' : 'is-best'));
+    badge.appendChild(icon(kind === 'weight' ? 'trophy' : 'trend'));
+    badge.appendChild(document.createTextNode(kind === 'weight' ? 'Rekord' : 'Bestleistung'));
+    badge.title = kind === 'weight' ? 'Neuer Rekord: so schwer wie nie zuvor' : 'Bestleistung: bestes geschätztes 1RM (mehr Wiederholungen)';
+    return badge;
+  }
+
   function buildLogPanel(ex, sets) {
     var form = el('form', 'log');
     form.noValidate = true;
     var editing = ui.editing && ui.editing.exId === ex.id && ui.editing.date === ui.date ? ui.editing : null;
-    var prs = computePRs(ex.id)[ui.date] || {};
+    var recs = computeRecords(ex.id);
+    var marks = recs.marks[ui.date] || {};
 
-    // Referenz: was beim letzten Mal lief
-    var last = lastSession(ex.id, ui.date);
-    if (last) {
-      var ref = el('p', 'log-ref');
-      ref.appendChild(el('b', null, 'Letztes Mal'));
-      ref.appendChild(document.createTextNode(' (' + relativeDay(last.date, true) + '): ' +
-        last.sets.map(function (s) { return formatWeight(s.weight) + ' × ' + s.reps; }).join(' · ')));
-      form.appendChild(ref);
-    } else if (!sets.length) {
-      form.appendChild(el('p', 'log-ref', 'Erster Satz für diese Übung. Gewicht und Wiederholungen einstellen, dann eintragen.'));
+    if (ex.note) {
+      var note = el('p', 'log-note');
+      note.appendChild(icon('note'));
+      note.appendChild(el('span', null, ex.note));
+      form.appendChild(note);
     }
+
+    // Referenz: letztes Mal und persönlicher Rekord
+    var last = lastSession(ex.id, ui.date);
+    var ref = el('div', 'log-ref');
+    if (last) {
+      var lastLine = el('p');
+      lastLine.appendChild(el('b', null, 'Letztes Mal'));
+      lastLine.appendChild(document.createTextNode(' (' + relativeDay(last.date, true) + '): ' +
+        last.sets.map(function (s) { return formatWeight(s.weight) + ' × ' + s.reps; }).join(' · ')));
+      ref.appendChild(lastLine);
+    } else if (!sets.length) {
+      ref.appendChild(el('p', null, 'Erster Satz für diese Übung. Gewicht und Wiederholungen einstellen, dann eintragen.'));
+    }
+    if (recs.record) {
+      var recLine = el('p', 'log-rec');
+      recLine.appendChild(icon('trophy'));
+      recLine.appendChild(el('b', null, 'Rekord '));
+      recLine.appendChild(document.createTextNode(setText(recs.record) + ' (' + formatISO(recs.record.date, true) + ')'));
+      ref.appendChild(recLine);
+    }
+    if (ref.childNodes.length) form.appendChild(ref);
 
     if (sets.length) {
       var ol = el('ol', 'sets');
       ol.setAttribute('aria-label', 'Sätze heute');
       sets.forEach(function (s, idx) {
-        ol.appendChild(buildSetRow(ex, s, idx, !!prs[idx], editing && editing.index === idx));
+        ol.appendChild(buildSetRow(ex, s, idx, marks[idx], editing && editing.index === idx));
       });
       form.appendChild(ol);
     }
@@ -1036,6 +1703,7 @@
     }
     actions.appendChild(logBtn);
     form.appendChild(actions);
+    if (!editing) form.appendChild(buildRestLine(ex, sets.length));
     sync();
 
     form.addEventListener('submit', function (e) {
@@ -1048,14 +1716,42 @@
     return form;
   }
 
-  function buildSetRow(ex, s, idx, isPR, isEditing) {
+  /* Hinweis unter dem Eintragen-Button: welche Pause danach startet */
+  function buildRestLine(ex, setCount) {
+    var row = el('div', 'log-rest');
+    var sec = restFor(ex);
+    var change = btn('rest-link');
+    change.appendChild(icon('timer'));
+    if (sec <= 0) {
+      change.appendChild(document.createTextNode('Ohne Pausentimer'));
+    } else if (data.settings.restAuto) {
+      change.appendChild(document.createTextNode('Danach ' + formatSecs(sec) + ' Pause'));
+    } else {
+      change.appendChild(document.createTextNode('Pause: ' + formatSecs(sec)));
+    }
+    change.setAttribute('aria-label', 'Pausendauer für ' + ex.name + ' ändern');
+    change.addEventListener('click', function () { openRestSheet(ex); });
+    row.appendChild(change);
+    if (sec > 0 && !data.settings.restAuto) {
+      var start = btn('btn-chip', 'Pause starten');
+      start.addEventListener('click', function () {
+        haptic('tap');
+        startRest(ex.id, setCount + 1, sec);
+      });
+      row.appendChild(start);
+    }
+    return row;
+  }
+
+  function buildSetRow(ex, s, idx, mark, isEditing) {
     var li = el('li', 'set' + (isEditing ? ' is-editing' : ''));
     var f = ui.flash;
     if (f && f.exId === ex.id && f.date === ui.date && f.index === idx) li.classList.add('is-new');
 
     var main = el('button', 'set-main');
     main.type = 'button';
-    main.setAttribute('aria-label', 'Satz ' + (idx + 1) + ': ' + setText(s) + (isPR ? ', Bestwert' : '') + '. Bearbeiten');
+    main.setAttribute('aria-label', 'Satz ' + (idx + 1) + ': ' + setText(s) +
+      (mark === 'weight' ? ', neuer Rekord' : mark === 'best' ? ', Bestleistung' : '') + '. Bearbeiten');
     main.appendChild(el('span', 'set-no', String(idx + 1)));
     var val = el('span', 'set-val');
     val.appendChild(document.createTextNode(formatWeight(s.weight)));
@@ -1063,13 +1759,7 @@
     val.appendChild(el('span', 'x', '×'));
     val.appendChild(document.createTextNode(String(s.reps)));
     main.appendChild(val);
-    if (isPR) {
-      var badge = el('span', 'badge-pr');
-      badge.appendChild(icon('trend'));
-      badge.appendChild(document.createTextNode('Bestwert'));
-      badge.title = 'Neuer Bestwert (geschätztes 1RM)';
-      main.appendChild(badge);
-    }
+    if (mark) main.appendChild(recordBadge(mark));
     main.addEventListener('click', function () {
       if (isEditing) {
         transition(function () { ui.editing = null; ui.draft = null; renderTraining(); });
@@ -1093,6 +1783,7 @@
   /* Stepper: −/+ (gedrückt halten wiederholt schneller), Zahl direkt antippbar */
   function buildStepper(draft, opts, onChange) {
     var f = opts.field;
+    var max = opts.max || 999;
     var wrap = el('div', 'stepper');
 
     var minus = btn('step-btn', null, 'minus', opts.label + ' verringern');
@@ -1108,14 +1799,21 @@
     field.appendChild(input);
     field.appendChild(el('span', 'step-unit', opts.unit));
 
-    function fmt(v) { return opts.decimal ? formatWeight(v) : String(v); }
+    function fmt(v) {
+      if (opts.decimal) return formatWeight(v);
+      return opts.thousands ? v.toLocaleString('de-DE') : String(v);
+    }
+    function parse(s) {
+      if (opts.thousands) s = s.replace(/\./g, '');
+      return parseFloat(s.replace(',', '.'));
+    }
     function show() {
       input.value = fmt(draft[f]);
       input.style.width = Math.max(1, input.value.length) + 0.3 + 'ch';
       minus.disabled = draft[f] <= 0;
     }
     function clean(v) {
-      v = Math.max(0, Math.min(999, v));
+      v = Math.max(0, Math.min(max, v));
       return opts.decimal ? Math.round(v * 100) / 100 : Math.round(v);
     }
     function stepBy(dir) {
@@ -1134,7 +1832,7 @@
 
     input.addEventListener('focus', function () { input.select(); });
     input.addEventListener('input', function () {
-      var v = parseFloat(input.value.replace(',', '.'));
+      var v = parse(input.value);
       input.style.width = Math.max(1, input.value.length) + 0.3 + 'ch';
       draft[f] = isFinite(v) ? clean(v) : NaN;
       minus.disabled = !(draft[f] > 0);
@@ -1152,23 +1850,24 @@
     wrap.appendChild(minus);
     wrap.appendChild(field);
     wrap.appendChild(plus);
+    wrap.setValue = function (v) { draft[f] = clean(v); show(); onChange(); };
     show();
     return wrap;
   }
 
   function holdRepeat(button, fn) {
-    var timer = null;
+    var timerId = null;
     var delay = 0;
     function stop() {
-      clearTimeout(timer);
-      timer = null;
+      clearTimeout(timerId);
+      timerId = null;
       button.classList.remove('is-pressed');
     }
     function loop() {
       if (!fn()) { stop(); return; }
       haptic('tick');
       delay = Math.max(40, delay * 0.8);
-      timer = setTimeout(loop, delay);
+      timerId = setTimeout(loop, delay);
     }
     button.addEventListener('pointerdown', function (e) {
       if (e.button !== 0 || button.disabled) return;
@@ -1176,7 +1875,7 @@
       button.classList.add('is-pressed');
       if (fn()) haptic('tick');
       delay = 160;
-      timer = setTimeout(loop, 420);
+      timerId = setTimeout(loop, 420);
       try { button.setPointerCapture(e.pointerId); } catch (err) { /* egal */ }
     });
     ['pointerup', 'pointercancel', 'lostpointercapture'].forEach(function (ev) {
@@ -1190,27 +1889,58 @@
   }
 
   function addSet(ex, draft) {
+    var date = ui.date;
+    var goalBefore = goalProgress(date);
     if (!data.logs[ex.id]) data.logs[ex.id] = {};
-    var day = data.logs[ex.id][ui.date] || (data.logs[ex.id][ui.date] = []);
-    day.push({ weight: draft.weight, reps: draft.reps });
+    var day = data.logs[ex.id][date] || (data.logs[ex.id][date] = []);
+    var set = { weight: draft.weight, reps: draft.reps };
+    if (date === todayISO()) set.t = Date.now();
+    day.push(set);
     saveData();
+
     var idx = day.length - 1;
-    var isPR = !!(computePRs(ex.id)[ui.date] || {})[idx];
-    haptic(isPR ? 'success' : 'tap');
+    var recs = computeRecords(ex.id);
+    var mark = (recs.marks[date] || {})[idx];
+    var event = null;
+    if (mark === 'weight') {
+      recs.events.forEach(function (e) { if (e.date === date && e.index === idx) event = e; });
+    }
+    var goalAfter = goalProgress(date);
+    var goalReached = goalAfter && goalAfter.done && !(goalBefore && goalBefore.done);
+    if (goalBefore) ui.goalAnimFrom = Math.min(1, goalBefore.ratio);
+
+    haptic(mark === 'weight' ? 'record' : mark ? 'success' : 'tap');
+    if (mark === 'weight' && data.settings.sound) Sound.record();
+
+    // Pausentimer für den nächsten Satz
+    var sec = restFor(ex);
+    if (data.settings.restAuto && sec > 0) startRest(ex.id, idx + 2, sec);
+
     transition(function () {
-      ui.flash = { exId: ex.id, date: ui.date, index: idx };
+      ui.flash = { exId: ex.id, date: date, index: idx };
       renderTraining();
     }, function () {
       ui.flash = null;
       var card = document.querySelector('.ex[data-id="' + ex.id + '"]');
       if (card) card.scrollIntoView({ block: 'nearest', behavior: reduceMotion.matches ? 'auto' : 'smooth' });
+      if (event) {
+        Confetti.celebrate(card && card.querySelector('.set.is-new .badge-pr, .set:last-child .badge-pr'));
+        toast('Neuer Rekord: ' + formatWeight(event.weight) + ' kg (vorher ' + formatWeight(event.prev) + ' kg)', null, null, 'record');
+      } else if (goalReached) {
+        var dayCard = document.querySelector('.day-card');
+        Confetti.fromElement(dayCard, { count: 70, spread: 1.4, power: 0.8 });
+        toast('Tagesziel erreicht: ' + goalText(goalAfter.goal), null, null, 'record');
+      }
     });
   }
 
   function saveEdit(ex, editing, draft) {
     var day = (data.logs[ex.id] || {})[editing.date];
     if (!day || !day[editing.index]) return;
-    day[editing.index] = { weight: draft.weight, reps: draft.reps };
+    var old = day[editing.index];
+    var updated = { weight: draft.weight, reps: draft.reps };
+    if (old.t) updated.t = old.t;
+    day[editing.index] = updated;
     saveData();
     haptic('tap');
     transition(function () {
@@ -1242,27 +1972,239 @@
     });
   }
 
+  /* ================= Tagesziel-Sheet ================= */
+
+  /* date = null bearbeitet das Standard-Ziel für alle Tage */
+  function openGoalSheet(date) {
+    var isDefault = !date;
+    var current = isDefault ? data.settings.goalDefault : goalFor(date);
+    var lastValue = { volume: 6000, sets: 20 };
+    if (current) lastValue[current.type] = current.value;
+    var state = {
+      type: current ? current.type : 'volume',
+      remember: !isDefault && !data.settings.goalDefault
+    };
+    var title = isDefault ? 'Standard-Tagesziel'
+      : 'Tagesziel ' + (date === todayISO() ? 'für heute' : 'für ' + formatISOLong(date));
+
+    openSheet(title, function (body, close) {
+      var seg = el('div', 'segmented');
+      var valueBox = el('div', 'sheet-value');
+      var rememberBox = el('div');
+      var saveBtn = btn('btn-primary sheet-save', 'Ziel speichern');
+
+      [{ key: 'volume', label: 'Volumen' }, { key: 'sets', label: 'Sätze' }, { key: 'none', label: 'Kein Ziel' }].forEach(function (o) {
+        var b = btn(null, o.label);
+        b.setAttribute('aria-pressed', String(state.type === o.key));
+        b.addEventListener('click', function () {
+          haptic('tick');
+          state.type = o.key;
+          seg.querySelectorAll('button').forEach(function (x) { x.setAttribute('aria-pressed', String(x === b)); });
+          renderValue();
+        });
+        seg.appendChild(b);
+      });
+
+      function renderValue() {
+        valueBox.textContent = '';
+        rememberBox.textContent = '';
+        saveBtn.disabled = false;
+        if (state.type === 'none') {
+          valueBox.appendChild(el('p', 'sheet-note', isDefault
+            ? 'Ohne Standard startet jeder Tag ohne Ziel. Für einzelne Tage kannst du trotzdem eins setzen.'
+            : 'An diesem Tag gibt es kein Ziel.'));
+          saveBtn.textContent = 'Speichern';
+          return;
+        }
+        saveBtn.textContent = 'Ziel speichern';
+        var vol = state.type === 'volume';
+        var draft = { value: lastValue[state.type] };
+        var presetRow = null;
+        var stepper = buildStepper(draft, {
+          field: 'value', step: vol ? 250 : 1, unit: vol ? 'kg' : 'Sätze', label: 'Ziel',
+          decimal: false, thousands: vol, max: vol ? 100000 : 200
+        }, function () {
+          lastValue[state.type] = draft.value;
+          saveBtn.disabled = !(draft.value > 0);
+          if (presetRow) {
+            presetRow.querySelectorAll('button').forEach(function (x) {
+              x.setAttribute('aria-pressed', String(+x.dataset.v === draft.value));
+            });
+          }
+        });
+        valueBox.appendChild(stepper);
+        var presets = vol ? [3000, 4000, 5000, 6000, 8000, 10000] : [10, 12, 16, 20, 24, 30];
+        presetRow = chipRow(presets.map(function (p) { return { v: p, label: vol ? formatNum(p, 0) : String(p) }; }),
+          function (o) { return o.v === draft.value; },
+          function (o) { stepper.setValue(o.v); });
+        presetRow.querySelectorAll('button').forEach(function (x, i) { x.dataset.v = String(presets[i]); });
+        valueBox.appendChild(presetRow);
+        if (!isDefault) {
+          rememberBox.appendChild(switchRow('Als Standard für alle Tage', 'Neue Tage starten mit diesem Ziel.', state.remember, function (on) { state.remember = on; }));
+        }
+      }
+
+      saveBtn.addEventListener('click', function () {
+        var g = state.type === 'none' ? null : { type: state.type, value: lastValue[state.type] };
+        if (g && !(g.value > 0)) return;
+        var before = isDefault ? null : goalProgress(date);
+        if (isDefault) {
+          setDefaultGoal(g);
+        } else {
+          data.goals[date] = g;
+          if (state.remember && g) setDefaultGoal(g);
+        }
+        saveData();
+        haptic('tap');
+        ui.goalAnimFrom = before ? Math.min(1, before.ratio) : 0;
+        close();
+        transition(render);
+      });
+
+      body.appendChild(seg);
+      body.appendChild(valueBox);
+      body.appendChild(rememberBox);
+      body.appendChild(saveBtn);
+      renderValue();
+    });
+  }
+
+  /* ================= Kategorien-Sheet ================= */
+
+  function nextFreeColor() {
+    var used = data.categories.map(function (c) { return c.color; });
+    for (var i = 0; i < CUSTOM_COLORS.length; i++) if (used.indexOf(CUSTOM_COLORS[i]) < 0) return CUSTOM_COLORS[i];
+    return CUSTOM_COLORS[data.categories.length % CUSTOM_COLORS.length];
+  }
+
+  function openCategorySheet(cat, onDone) {
+    var isNew = !cat;
+    var state = { color: cat ? cat.color : nextFreeColor() };
+    openSheet(isNew ? 'Neue Kategorie' : 'Kategorie bearbeiten', function (body, close) {
+      var form = el('form', 'sheet-form');
+      form.noValidate = true;
+      var label = el('label', 'field-label', 'Name');
+      label.htmlFor = 'cat-name';
+      var input = el('input', 'text-input');
+      input.id = 'cat-name';
+      input.type = 'text';
+      input.maxLength = 24;
+      input.autocomplete = 'off';
+      input.placeholder = 'z. B. Schultern';
+      input.value = cat ? cat.label : '';
+      var hint = el('p', 'form-hint');
+      hint.setAttribute('role', 'alert');
+
+      var swLabel = el('p', 'field-label', 'Farbe');
+      var swatches = el('div', 'swatches');
+      swatches.setAttribute('role', 'radiogroup');
+      swatches.setAttribute('aria-label', 'Farbe');
+      CUSTOM_COLORS.forEach(function (c) {
+        var b = btn('swatch');
+        b.style.setProperty('--cat', 'var(--cc-' + c + ')');
+        b.setAttribute('role', 'radio');
+        b.setAttribute('aria-checked', String(state.color === c));
+        b.setAttribute('aria-label', 'Farbe ' + c);
+        b.addEventListener('click', function () {
+          haptic('tick');
+          state.color = c;
+          swatches.querySelectorAll('.swatch').forEach(function (x) { x.setAttribute('aria-checked', String(x === b)); });
+        });
+        swatches.appendChild(b);
+      });
+
+      var actions = el('div', 'sheet-actions');
+      if (!isNew) {
+        var count = data.exercises.filter(function (e) { return e.category === cat.key; }).length;
+        var del = btn('btn-secondary danger-text', 'Löschen', 'trash');
+        del.addEventListener('click', function () {
+          var msg = '„' + cat.label + '“ löschen?' + (count ? ' ' + plural(count, 'Übung landet', 'Übungen landen') + ' unter „Ohne Kategorie“.' : '');
+          if (!confirm(msg)) return;
+          data.categories = data.categories.filter(function (c) { return c.key !== cat.key; });
+          data.exercises.forEach(function (e) { if (e.category === cat.key) delete e.category; });
+          if (ui.filter === cat.key) ui.filter = 'all';
+          if (ui.newCategory === cat.key) ui.newCategory = null;
+          saveData();
+          savePrefs();
+          close();
+          transition(render);
+          toast('Kategorie „' + cat.label + '“ gelöscht');
+        });
+        actions.appendChild(del);
+      }
+      var save = el('button', 'btn-primary', isNew ? 'Kategorie anlegen' : 'Speichern');
+      save.type = 'submit';
+      actions.appendChild(save);
+
+      form.addEventListener('submit', function (e) {
+        e.preventDefault();
+        var name = input.value.trim().slice(0, 24);
+        if (!name) { hint.textContent = 'Gib der Kategorie einen Namen.'; input.focus(); return; }
+        var clash = allCategories().some(function (c) {
+          return c.label.toLowerCase() === name.toLowerCase() && (!cat || c.key !== cat.key);
+        });
+        if (clash) { hint.textContent = '„' + name + '“ gibt es schon.'; input.focus(); return; }
+        var key;
+        if (isNew) {
+          key = uid('c');
+          data.categories.push({ key: key, label: name, color: state.color });
+        } else {
+          key = cat.key;
+          cat.label = name;
+          cat.color = state.color;
+        }
+        saveData();
+        haptic('success');
+        close();
+        if (onDone) onDone(key);
+        transition(render);
+      });
+
+      form.appendChild(label);
+      form.appendChild(input);
+      form.appendChild(swLabel);
+      form.appendChild(swatches);
+      form.appendChild(hint);
+      form.appendChild(actions);
+      body.appendChild(form);
+    });
+  }
+
   /* ================= View: Übungen ================= */
 
-  function renderAddPicker() {
-    var picker = $('add-cats');
-    picker.textContent = '';
-    var selected = ui.newCategory || (isCategory(ui.filter) ? ui.filter : null);
-    CATEGORIES.forEach(function (c) {
-      var opt = btn('cat-option');
-      opt.dataset.cat = c.key;
+  function buildCatPicker(container, selected, onPick, withAdd) {
+    container.textContent = '';
+    allCategories().forEach(function (c) {
+      var opt = applyCat(btn('cat-option'), c.key);
       opt.setAttribute('role', 'radio');
       opt.setAttribute('aria-checked', String(selected === c.key));
       opt.appendChild(el('span', 'chip-dot'));
       opt.appendChild(el('span', 'chip-label', c.label));
       opt.addEventListener('click', function () {
         haptic('tick');
-        ui.newCategory = c.key;
-        $('add-hint').textContent = '';
-        renderAddPicker();
+        onPick(c.key);
       });
-      picker.appendChild(opt);
+      container.appendChild(opt);
     });
+    if (withAdd) {
+      var add = btn('cat-option cat-add', null, null, 'Neue Kategorie anlegen');
+      add.appendChild(icon('plus'));
+      add.appendChild(el('span', 'chip-label', 'Neu'));
+      add.addEventListener('click', function () {
+        openCategorySheet(null, function (key) { onPick(key); });
+      });
+      container.appendChild(add);
+    }
+    container.classList.toggle('is-scrollable', container.scrollWidth > container.clientWidth + 1);
+  }
+
+  function renderAddPicker() {
+    var selected = ui.newCategory || (isCategory(ui.filter) ? ui.filter : null);
+    buildCatPicker($('add-cats'), selected, function (key) {
+      ui.newCategory = key;
+      $('add-hint').textContent = '';
+      renderAddPicker();
+    }, true);
   }
 
   $('exercise-add-form').addEventListener('submit', function (e) {
@@ -1286,7 +2228,7 @@
       return;
     }
     hint.textContent = '';
-    var ex = { id: uid(), name: name, category: cat, createdAt: todayISO() };
+    var ex = { id: uid('ex'), name: name, category: cat, createdAt: todayISO() };
     data.exercises.push(ex);
     saveData();
     input.value = '';
@@ -1322,7 +2264,7 @@
   function buildListRow(ex) {
     var row = el('button', 'row' + (ui.newId === ex.id ? ' is-new' : ''));
     row.type = 'button';
-    row.dataset.cat = catOf(ex);
+    applyCat(row, catOf(ex));
     row.dataset.id = ex.id;
     row.style.viewTransitionName = vtName('ls', ex.id);
 
@@ -1331,12 +2273,15 @@
 
     var text = el('span', 'ex-text');
     text.appendChild(el('span', 'ex-name', ex.name));
-    var days = Object.keys(data.logs[ex.id] || {}).length;
     var last = lastTrainedDate(ex.id);
+    var rec = computeRecords(ex.id).record;
     var meta = el('span', 'ex-meta');
-    meta.textContent = days
-      ? days + (days === 1 ? ' Trainingstag' : ' Trainingstage') + ' · zuletzt ' + relativeDay(last, true)
-      : 'Noch nicht trainiert';
+    if (rec) {
+      meta.appendChild(icon('trophy', 'meta-ico'));
+      meta.appendChild(document.createTextNode(formatWeight(rec.weight) + ' kg · zuletzt ' + relativeDay(last, true)));
+    } else {
+      meta.textContent = 'Noch nicht trainiert';
+    }
     text.appendChild(meta);
     row.appendChild(text);
     row.appendChild(icon('chevron-right', 'chev'));
@@ -1377,6 +2322,7 @@
     saveData();
     removePhoto(ex.id);
     if (ui.openId === ex.id) ui.openId = null;
+    if (timer && timer.exId === ex.id) stopRest();
     show('exercises');
     toast('„' + ex.name + '“ gelöscht');
   }
@@ -1422,32 +2368,20 @@
   }
 
   function renderDetailCats(ex) {
-    var picker = $('detail-cats');
-    picker.textContent = '';
-    CATEGORIES.forEach(function (c) {
-      var opt = btn('cat-option');
-      opt.dataset.cat = c.key;
-      opt.setAttribute('role', 'radio');
-      opt.setAttribute('aria-checked', String(catOf(ex) === c.key));
-      opt.appendChild(el('span', 'chip-dot'));
-      opt.appendChild(el('span', 'chip-label', c.label));
-      opt.addEventListener('click', function () {
-        if (catOf(ex) === c.key) return;
-        ex.category = c.key;
-        saveData();
-        haptic('tick');
-        renderDetailCats(ex);
-      });
-      picker.appendChild(opt);
-    });
+    buildCatPicker($('detail-cats'), catOf(ex), function (key) {
+      if (catOf(ex) === key) return;
+      ex.category = key;
+      saveData();
+      renderDetailCats(ex);
+    }, true);
   }
 
   function renderDetailPhoto(ex) {
     var box = $('detail-photo');
     box.textContent = '';
-    var has = !!photos[ex.id];
+    var hasPhoto = !!photos[ex.id];
 
-    if (has) {
+    if (hasPhoto) {
       var frame = el('button', 'photo-frame');
       frame.type = 'button';
       frame.setAttribute('aria-label', 'Foto groß anzeigen');
@@ -1466,13 +2400,13 @@
     }
 
     var actions = el('div', 'photo-actions');
-    var cam = btn('btn-secondary', has ? 'Neues Foto' : 'Foto aufnehmen', 'camera');
+    var cam = btn('btn-secondary', hasPhoto ? 'Neues Foto' : 'Foto aufnehmen', 'camera');
     cam.addEventListener('click', function () { pickPhoto(ex.id, true); });
     var gal = btn('btn-secondary', 'Aus Galerie', 'image');
     gal.addEventListener('click', function () { pickPhoto(ex.id, false); });
     actions.appendChild(cam);
     actions.appendChild(gal);
-    if (has) {
+    if (hasPhoto) {
       var del = btn('icon-btn danger', null, 'trash', 'Foto entfernen');
       del.addEventListener('click', function () {
         var old = photos[ex.id];
@@ -1496,23 +2430,55 @@
     var days = Object.keys(log).filter(function (d) { return log[d] && log[d].length; });
     dl.hidden = !days.length;
     if (!days.length) return;
-    var best = 0, top = 0;
-    days.forEach(function (d) {
-      best = Math.max(best, dayMetric(log[d], 'e1rm'));
-      top = Math.max(top, dayMetric(log[d], 'top'));
-    });
-    dl.appendChild(fact('Bestwert 1RM', formatNum(best, best >= 100 ? 0 : 1), 'kg'));
-    dl.appendChild(fact('Top-Gewicht', formatWeight(top), 'kg'));
-    dl.appendChild(fact('Trainingstage', String(days.length)));
+    var recs = computeRecords(ex.id);
+    var rec = recs.record;
+    dl.appendChild(fact('Rekord', formatWeight(rec.weight), 'kg', '× ' + rec.reps + ' · ' + formatISO(rec.date), 'is-record'));
+    dl.appendChild(fact('Bestes 1RM', formatNum(recs.bestE1rm, recs.bestE1rm >= 100 ? 0 : 1), 'kg', 'geschätzt'));
+    dl.appendChild(fact('Trainingstage', String(days.length), null, plural(recs.events.length, 'Rekord', 'Rekorde')));
   }
 
-  function fact(label, value, unit) {
-    var box = el('div', 'fact');
+  function fact(label, value, unit, sub, cls) {
+    var box = el('div', 'fact' + (cls ? ' ' + cls : ''));
     box.appendChild(el('dt', null, label));
     var dd = el('dd', null, value);
     if (unit) dd.appendChild(el('small', null, unit));
     box.appendChild(dd);
+    if (sub) {
+      var s = el('dd', 'fact-sub', typeof sub === 'string' ? sub : sub.text);
+      if (sub.cls) s.classList.add(sub.cls);
+      box.appendChild(s);
+    }
     return box;
+  }
+
+  var noteTimer = null;
+  $('detail-note').addEventListener('input', function () {
+    var ex = getExercise(ui.detailId);
+    if (!ex) return;
+    var v = this.value.slice(0, 200);
+    clearTimeout(noteTimer);
+    noteTimer = setTimeout(function () {
+      if (v.trim()) ex.note = v.trim(); else delete ex.note;
+      saveData();
+    }, 300);
+  });
+
+  function renderDetailExtra(ex) {
+    var note = $('detail-note');
+    if (document.activeElement !== note) note.value = ex.note || '';
+    var box = $('detail-rest');
+    box.textContent = '';
+    var sec = restFor(ex);
+    var row = btn('setting-row');
+    var text = el('span', 'setting-text');
+    text.appendChild(el('span', null, 'Pause nach jedem Satz'));
+    text.appendChild(el('small', null, ex.rest === 0 ? 'Kein Pausentimer' :
+      (isFinite(ex.rest) && ex.rest > 0 ? formatSecs(sec) + ' (eigene Einstellung)' : formatSecs(sec) + ' (Standard)')));
+    row.appendChild(icon('timer'));
+    row.appendChild(text);
+    row.appendChild(icon('chevron-right', 'chev'));
+    row.addEventListener('click', function () { openRestSheet(ex); });
+    box.appendChild(row);
   }
 
   function renderDetail() {
@@ -1522,8 +2488,9 @@
     renderDetailCats(ex);
     renderDetailPhoto(ex);
     renderDetailFacts(ex);
+    renderDetailExtra(ex);
 
-    buildSegmented($('detail-metric-toggle'), ui.detailMetric, function (key) {
+    buildSegmented($('detail-metric-toggle'), METRICS, ui.detailMetric, function (key) {
       ui.detailMetric = key;
       transition(renderDetailChart);
     });
@@ -1532,7 +2499,7 @@
     var hist = $('detail-history');
     hist.textContent = '';
     var log = data.logs[ex.id] || {};
-    var prs = computePRs(ex.id);
+    var marks = computeRecords(ex.id).marks;
     var dates = Object.keys(log).sort().reverse();
     if (!dates.length) {
       hist.appendChild(el('li', 'empty-line', 'Noch keine Trainingstage.'));
@@ -1543,9 +2510,11 @@
       li.appendChild(el('span', 'h-vol', formatNum(dayMetric(log[date], 'volume'), 0) + ' kg Volumen'));
       var setsBox = el('span', 'h-sets');
       log[date].forEach(function (s, i) {
-        var isPR = prs[date] && prs[date][i];
-        var chip = el('span', 'h-set' + (isPR ? ' pr' : ''), formatWeight(s.weight) + ' × ' + s.reps);
-        if (isPR) chip.title = 'Bestwert';
+        var m = marks[date] && marks[date][i];
+        var chip = el('span', 'h-set' + (m === 'weight' ? ' rec' : m === 'best' ? ' pr' : ''));
+        if (m === 'weight') chip.appendChild(icon('trophy'));
+        chip.appendChild(document.createTextNode(formatWeight(s.weight) + ' × ' + s.reps));
+        if (m) chip.title = m === 'weight' ? 'Rekord' : 'Bestleistung';
         setsBox.appendChild(chip);
       });
       li.appendChild(setsBox);
@@ -1559,9 +2528,7 @@
     var metric = ui.detailMetric;
     var series = exerciseSeries(ex.id, metric);
     $('detail-chart-empty').hidden = series.length > 0;
-    $('detail-metric-toggle').querySelectorAll('button').forEach(function (b) {
-      b.setAttribute('aria-pressed', String(b.dataset.key === metric));
-    });
+    setPressed($('detail-metric-toggle'), metric);
     drawChart($('detail-chart'), series, {
       hintEl: $('detail-chart-hint'),
       hintFormat: function (pt, isLast) {
@@ -1576,9 +2543,9 @@
     return key;
   }
 
-  function buildSegmented(container, active, onChange) {
+  function buildSegmented(container, items, active, onChange) {
     container.textContent = '';
-    METRICS.forEach(function (m) {
+    items.forEach(function (m) {
       var b = btn(null, m.label);
       b.dataset.key = m.key;
       b.setAttribute('aria-pressed', String(m.key === active));
@@ -1591,97 +2558,465 @@
     });
   }
 
-  /* ================= View: Statistik ================= */
-
-  function renderStats() {
-    // Kennzahlen
-    var allDates = {};
-    var totalVolume = 0;
-    var totalSets = 0;
-    Object.keys(data.logs).forEach(function (exId) {
-      Object.keys(data.logs[exId]).forEach(function (date) {
-        var sets = data.logs[exId][date] || [];
-        if (!sets.length) return;
-        allDates[date] = true;
-        totalSets += sets.length;
-        totalVolume += dayMetric(sets, 'volume') || 0;
-      });
+  function setPressed(container, key) {
+    container.querySelectorAll('button').forEach(function (b) {
+      b.setAttribute('aria-pressed', String(b.dataset.key === key));
     });
-    var grid = $('stats-numbers');
-    grid.textContent = '';
-    grid.appendChild(fact('Trainingstage', String(Object.keys(allDates).length)));
-    grid.appendChild(fact('Sätze', formatNum(totalSets, 0)));
-    grid.appendChild(fact('Volumen', totalVolume >= 10000 ? formatNum(totalVolume / 1000, 1) : formatNum(totalVolume, 0), totalVolume >= 10000 ? 't' : 'kg'));
-
-    buildSegmented($('stats-metric-toggle'), ui.statsMetric, function (key) {
-      ui.statsMetric = key;
-      transition(renderStatsChart);
-    });
-    renderStatsChart();
-    renderCategoryBars();
   }
 
-  function renderStatsChart() {
-    var series = globalSeries(ui.statsMetric);
-    $('stats-chart-empty').hidden = series.length > 0;
-    $('stats-metric-toggle').querySelectorAll('button').forEach(function (b) {
-      b.setAttribute('aria-pressed', String(b.dataset.key === ui.statsMetric));
+  /* ================= View: Statistik ================= */
+
+  var RANGES = [
+    { key: '4w', label: '4 Wochen', days: 28 },
+    { key: '3m', label: '3 Monate', days: 91 },
+    { key: '1y', label: '1 Jahr', days: 365 },
+    { key: 'all', label: 'Alles', days: null }
+  ];
+
+  function allTrainingDates() {
+    var set = {};
+    data.exercises.forEach(function (ex) {
+      var log = data.logs[ex.id] || {};
+      Object.keys(log).forEach(function (d) { if (log[d] && log[d].length) set[d] = true; });
     });
-    drawChart($('stats-chart'), series, {
+    return Object.keys(set).sort();
+  }
+
+  /* Zeitraum [since, until]; prevSince für den Vergleich mit dem Zeitraum davor */
+  function statsRange() {
+    var today = todayISO();
+    var r = RANGES.filter(function (x) { return x.key === ui.statsRange; })[0] || RANGES[1];
+    if (!r.days) {
+      var dates = allTrainingDates();
+      return { since: dates.length ? dates[0] : today, until: today, prevSince: null, days: dates.length ? daysBetween(dates[0], today) + 1 : 1 };
+    }
+    var since = shiftISO(today, -(r.days - 1));
+    return { since: since, until: today, prevSince: shiftISO(since, -r.days), days: r.days };
+  }
+
+  /* Kennzahlen für einen Zeitraum */
+  function periodStats(since, until) {
+    var days = {};
+    var sets = 0, volume = 0, records = 0, exercises = {};
+    data.exercises.forEach(function (ex) {
+      var log = data.logs[ex.id] || {};
+      Object.keys(log).forEach(function (d) {
+        if (d < since || d > until || !log[d] || !log[d].length) return;
+        days[d] = true;
+        exercises[ex.id] = true;
+        log[d].forEach(function (s) { sets++; volume += s.weight * s.reps; });
+      });
+      computeRecords(ex.id).events.forEach(function (e) { if (e.date >= since && e.date <= until) records++; });
+    });
+    var dayList = Object.keys(days);
+    var durations = [];
+    var goalDays = 0, goalHit = 0;
+    dayList.forEach(function (d) {
+      var sum = daySummary(d);
+      if (sum.minutes !== null) durations.push(sum.minutes);
+      var p = goalProgress(d, sum);
+      if (p) { goalDays++; if (p.done) goalHit++; }
+    });
+    var avgDur = durations.length ? Math.round(durations.reduce(function (a, b) { return a + b; }, 0) / durations.length) : null;
+    return {
+      days: dayList.length, sets: sets, volume: volume, records: records,
+      exercises: Object.keys(exercises).length, avgMinutes: avgDur,
+      goalDays: goalDays, goalHit: goalHit
+    };
+  }
+
+  function deltaSub(cur, prev) {
+    if (prev === null || prev === undefined) return null;
+    if (!prev) return cur ? { text: 'neu im Zeitraum', cls: 'up' } : null;
+    var pct = Math.round((cur - prev) / prev * 100);
+    if (pct === 0) return { text: '±0 % vs. davor' };
+    return { text: (pct > 0 ? '+' : '') + pct + ' % vs. davor', cls: pct > 0 ? 'up' : 'down' };
+  }
+
+  function renderStats() {
+    buildSegmented($('stats-range'), RANGES, ui.statsRange, function (key) {
+      ui.statsRange = key;
+      savePrefs();
+      transition(renderStats, null, 'list');
+    });
+
+    var hasData = allTrainingDates().length > 0;
+    $('stats-body').hidden = !hasData;
+    var empty = $('stats-empty');
+    empty.hidden = hasData;
+    empty.textContent = '';
+    if (!hasData) {
+      empty.appendChild(emptyState('chart', 'Noch keine Trainingsdaten',
+        'Sobald du Sätze einträgst, siehst du hier Kalender, Wochenvolumen, Rekorde und deine Entwicklung.'));
+      return;
+    }
+
+    var range = statsRange();
+    var cur = periodStats(range.since, range.until);
+    var prev = range.prevSince ? periodStats(range.prevSince, shiftISO(range.since, -1)) : null;
+    var weeks = Math.max(1, range.days / 7);
+
+    var grid = $('stats-numbers');
+    grid.textContent = '';
+    grid.appendChild(fact('Trainingstage', String(cur.days), null, 'Ø ' + formatNum(cur.days / weeks, 1) + ' pro Woche'));
+    grid.appendChild(fact('Sätze', formatNum(cur.sets, 0), null, prev ? deltaSub(cur.sets, prev.sets) : null));
+    var vol = formatVolume(cur.volume).split(' ');
+    grid.appendChild(fact('Volumen', vol[0], vol[1], prev ? deltaSub(cur.volume, prev.volume) : null));
+    if (cur.avgMinutes !== null) {
+      grid.appendChild(fact('Ø Dauer', String(cur.avgMinutes), 'min', 'pro Training'));
+    } else {
+      grid.appendChild(fact('Übungen', String(cur.exercises), null, 'trainiert'));
+    }
+    var av = formatVolume(cur.days ? cur.volume / cur.days : 0).split(' ');
+    grid.appendChild(fact('Ø Volumen', av[0], av[1], 'pro Training'));
+    grid.appendChild(fact('Rekorde', String(cur.records), null,
+      cur.goalDays ? 'Ziel ' + cur.goalHit + '/' + cur.goalDays + ' Tage' : 'neue Bestgewichte', 'is-record'));
+
+    renderHeatmap();
+    renderWeekly(range);
+    renderRecordList(range);
+    renderProgressList(range);
+    buildSegmented($('stats-cat-mode'), [{ key: 'sets', label: 'Sätze' }, { key: 'volume', label: 'Volumen' }], ui.statsCatMode, function (key) {
+      ui.statsCatMode = key;
+      savePrefs();
+      setPressed($('stats-cat-mode'), key);
+      renderCategoryBars(statsRange());
+    });
+    renderCategoryBars(range);
+
+    buildSegmented($('stats-metric-toggle'), METRICS, ui.statsMetric, function (key) {
+      ui.statsMetric = key;
+      transition(function () { renderStatsChart(statsRange()); });
+    });
+    renderStatsChart(range);
+  }
+
+  /* Trainingskalender: 18 Wochen, Montag oben */
+  function renderHeatmap() {
+    var box = $('stats-heatmap');
+    box.textContent = '';
+    var WEEKS = 18;
+    var today = todayISO();
+    var start = shiftISO(weekStartISO(today), -7 * (WEEKS - 1));
+    var vol = {};
+    data.exercises.forEach(function (ex) {
+      var log = data.logs[ex.id] || {};
+      Object.keys(log).forEach(function (d) {
+        if (d >= start && d <= today && log[d] && log[d].length) vol[d] = (vol[d] || 0) + dayMetric(log[d], 'volume');
+      });
+    });
+    var max = 0;
+    Object.keys(vol).forEach(function (d) { max = Math.max(max, vol[d]); });
+
+    var months = el('div', 'hm-months');
+    var grid = el('div', 'hm-grid');
+    var lastMonth = -1;
+    var trainedDays = 0;
+    for (var w = 0; w < WEEKS; w++) {
+      var weekISO = shiftISO(start, 7 * w);
+      var m = parseISO(weekISO).getMonth();
+      var ml = el('span', null, m !== lastMonth && w < WEEKS - 1 ? MONTHS_SHORT[m] : '');
+      ml.style.gridColumn = String(w + 1);
+      months.appendChild(ml);
+      lastMonth = m;
+      for (var d = 0; d < 7; d++) {
+        var iso = shiftISO(weekISO, d);
+        var cell = el('span', 'hm-cell');
+        var v = vol[iso] || 0;
+        var level = !v ? 0 : v / max > 0.75 ? 4 : v / max > 0.5 ? 3 : v / max > 0.25 ? 2 : 1;
+        cell.dataset.level = String(level);
+        if (iso > today) cell.classList.add('is-future');
+        if (iso === today) cell.classList.add('is-today');
+        if (v) {
+          trainedDays++;
+          var p = goalProgress(iso);
+          if (p && p.done) cell.classList.add('is-goal');
+        }
+        cell.title = formatISOLong(iso) + ': ' + (v ? formatNum(v, 0) + ' kg' : 'kein Training');
+        grid.appendChild(cell);
+      }
+    }
+    var days = el('div', 'hm-days');
+    ['Mo', '', 'Mi', '', 'Fr', '', 'So'].forEach(function (t) { days.appendChild(el('span', null, t)); });
+
+    var wrap = el('div', 'hm-wrap');
+    wrap.setAttribute('role', 'img');
+    wrap.setAttribute('aria-label', 'Trainingskalender: ' + trainedDays + ' Trainingstage in den letzten 18 Wochen');
+    wrap.appendChild(el('span', 'hm-corner'));
+    wrap.appendChild(months);
+    wrap.appendChild(days);
+    wrap.appendChild(grid);
+    box.appendChild(wrap);
+
+    var legend = el('div', 'hm-legend');
+    legend.appendChild(el('span', null, 'Weniger'));
+    [0, 1, 2, 3, 4].forEach(function (l) {
+      var c = el('span', 'hm-cell');
+      c.dataset.level = String(l);
+      legend.appendChild(c);
+    });
+    legend.appendChild(el('span', null, 'Mehr'));
+    var goalKey = el('span', 'hm-goal-key');
+    var gc = el('span', 'hm-cell is-goal');
+    gc.dataset.level = '2';
+    goalKey.appendChild(gc);
+    goalKey.appendChild(document.createTextNode('Ziel erreicht'));
+    legend.appendChild(goalKey);
+    box.appendChild(legend);
+
+    // Serie: Wochen in Folge mit mindestens einem Training
+    var trained = {};
+    allTrainingDates().forEach(function (dd) { trained[weekStartISO(dd)] = (trained[weekStartISO(dd)] || 0) + 1; });
+    var wk = weekStartISO(today);
+    var thisWeek = trained[wk] || 0;
+    if (!thisWeek) wk = shiftISO(wk, -7);
+    var streak = 0;
+    while (trained[wk]) { streak++; wk = shiftISO(wk, -7); }
+    var sEl = $('stats-streak');
+    sEl.textContent = '';
+    sEl.appendChild(el('b', null, streak ? plural(streak, 'Woche', 'Wochen') + ' in Folge' : 'Noch keine Serie'));
+    sEl.appendChild(document.createTextNode(' · diese Woche ' + plural(thisWeek, 'Training', 'Trainings')));
+  }
+
+  /* Volumen pro Kalenderwoche im Zeitraum (höchstens 52 Wochen) */
+  function renderWeekly(range) {
+    var firstWeek = weekStartISO(range.since);
+    var lastWeek = weekStartISO(range.until);
+    var weeks = [];
+    for (var wk = firstWeek; wk <= lastWeek; wk = shiftISO(wk, 7)) weeks.push({ date: wk, value: 0, days: {} });
+    if (weeks.length > 52) weeks = weeks.slice(weeks.length - 52);
+    var idx = {};
+    weeks.forEach(function (w, i) { idx[w.date] = i; });
+    data.exercises.forEach(function (ex) {
+      var log = data.logs[ex.id] || {};
+      Object.keys(log).forEach(function (d) {
+        var i = idx[weekStartISO(d)];
+        if (i === undefined || !log[d] || !log[d].length) return;
+        weeks[i].value += dayMetric(log[d], 'volume');
+        weeks[i].days[d] = true;
+      });
+    });
+    drawChart($('stats-weekly'), weeks, {
+      type: 'bar',
+      hintEl: $('stats-weekly-hint'),
+      hintFormat: function (pt) {
+        var n = Object.keys(pt.days).length;
+        return ['KW ' + isoWeek(pt.date) + ' (' + formatISO(pt.date) + ' bis ' + formatISO(shiftISO(pt.date, 6)) + '): ',
+          formatNum(pt.value, 0) + ' kg', ' · ' + plural(n, 'Training', 'Trainings')];
+      }
+    });
+  }
+
+  function rankRow(ex, title, sub, value, cls) {
+    var li = applyCat(el('li', 'rank-row'), catOf(ex));
+    li.appendChild(el('span', 'chip-dot'));
+    var text = el('span', 'rank-text');
+    text.appendChild(el('span', 'rank-title', title));
+    text.appendChild(el('span', 'rank-sub', sub));
+    li.appendChild(text);
+    li.appendChild(el('span', 'rank-val' + (cls ? ' ' + cls : ''), value));
+    return li;
+  }
+
+  function renderRecordList(range) {
+    var list = $('stats-records');
+    list.textContent = '';
+    var events = [];
+    data.exercises.forEach(function (ex) {
+      computeRecords(ex.id).events.forEach(function (e) {
+        if (e.date >= range.since && e.date <= range.until) events.push(e);
+      });
+    });
+    events.sort(function (a, b) { return a.date < b.date ? 1 : a.date > b.date ? -1 : b.weight - a.weight; });
+    if (!events.length) {
+      list.appendChild(el('li', 'empty-line', 'Noch keine neuen Rekorde in diesem Zeitraum.'));
+      return;
+    }
+    events.slice(0, 8).forEach(function (e) {
+      var ex = getExercise(e.exId);
+      list.appendChild(rankRow(ex, ex.name, formatWeight(e.weight) + ' kg × ' + e.reps + ' · ' + relativeDay(e.date),
+        '+' + formatWeight(e.weight - e.prev) + ' kg', 'up'));
+    });
+  }
+
+  function renderProgressList(range) {
+    var list = $('stats-progress');
+    list.textContent = '';
+    var rows = [];
+    data.exercises.forEach(function (ex) {
+      var s = exerciseSeries(ex.id, 'top', range.since);
+      if (s.length < 2) return;
+      var first = s[0].value, last = s[s.length - 1].value;
+      if (first <= 0) return;
+      rows.push({ ex: ex, first: first, last: last, pct: (last - first) / first * 100 });
+    });
+    rows.sort(function (a, b) { return b.pct - a.pct; });
+    if (!rows.length) {
+      list.appendChild(el('li', 'empty-line', 'Dafür braucht eine Übung mindestens zwei Trainingstage im Zeitraum.'));
+      return;
+    }
+    rows.slice(0, 6).forEach(function (r) {
+      var sign = r.pct > 0.05 ? '+' : r.pct < -0.05 ? '' : '±';
+      list.appendChild(rankRow(r.ex, r.ex.name, formatWeight(r.first) + ' → ' + formatWeight(r.last) + ' kg',
+        sign + formatNum(r.pct, 1) + ' %', r.pct > 0.05 ? 'up' : r.pct < -0.05 ? 'down' : ''));
+    });
+  }
+
+  function renderCategoryBars(range) {
+    var box = $('stats-cats');
+    box.textContent = '';
+    var mode = ui.statsCatMode;
+    var counts = {};
+    allCategories().forEach(function (c) { counts[c.key] = 0; });
+    counts[NONE] = 0;
+    data.exercises.forEach(function (ex) {
+      var log = data.logs[ex.id] || {};
+      Object.keys(log).forEach(function (date) {
+        if (date < range.since || date > range.until) return;
+        var sets = log[date] || [];
+        counts[catOf(ex)] += mode === 'volume' ? (dayMetric(sets, 'volume') || 0) : sets.length;
+      });
+    });
+    var keys = allCategories().map(function (c) { return c.key; });
+    if (counts[NONE]) keys.push(NONE);
+    var max = 0, total = 0;
+    keys.forEach(function (k) { max = Math.max(max, counts[k]); total += counts[k]; });
+    if (!max) {
+      box.appendChild(el('p', 'empty-line', 'In diesem Zeitraum noch keine Sätze eingetragen.'));
+      return;
+    }
+    keys.forEach(function (k) {
+      var row = applyCat(el('div', 'cat-bar'), k);
+      var label = el('span', 'cat-bar-label');
+      label.appendChild(el('span', 'chip-dot'));
+      label.appendChild(el('span', 'chip-label', k === NONE ? 'Ohne' : catLabel(k)));
+      var track = el('span', 'cat-bar-track');
+      var fill = el('span', 'cat-bar-fill');
+      fill.style.width = (counts[k] / max * 100) + '%';
+      track.appendChild(fill);
+      var valText = mode === 'volume' ? formatVolume(counts[k]) : String(counts[k]);
+      var share = total ? Math.round(counts[k] / total * 100) : 0;
+      row.appendChild(label);
+      row.appendChild(track);
+      row.appendChild(el('span', 'cat-bar-val', valText));
+      row.setAttribute('aria-label', (k === NONE ? 'Ohne Kategorie' : catLabel(k)) + ': ' + valText + ' (' + share + ' %)');
+      row.title = share + ' % vom Gesamt';
+      box.appendChild(row);
+    });
+  }
+
+  function renderStatsChart(range) {
+    var series = globalSeries(ui.statsMetric, range.since);
+    $('stats-chart-empty').hidden = series.length > 1;
+    setPressed($('stats-metric-toggle'), ui.statsMetric);
+    drawChart($('stats-chart'), series.length > 1 ? series : [], {
       baseline: 100,
       hintEl: $('stats-chart-hint'),
       hintFormat: function (pt, isLast) {
         var diff = pt.value - 100;
         return [(isLast ? 'Zuletzt ' : '') + formatISO(pt.date, true) + ': ', formatNum(pt.value, 1) + ' %',
-          ' (' + (diff >= 0 ? '+' : '') + formatNum(diff, 1) + ' % seit Start)'];
+          ' (' + (diff >= 0 ? '+' : '') + formatNum(diff, 1) + ' % im Zeitraum)'];
       }
     });
   }
 
-  function renderCategoryBars() {
-    var box = $('stats-cats');
-    box.textContent = '';
-    var since = shiftISO(todayISO(), -27);
-    var counts = {};
-    CATEGORIES.forEach(function (c) { counts[c.key] = 0; });
-    counts[NONE] = 0;
-    data.exercises.forEach(function (ex) {
-      var log = data.logs[ex.id] || {};
-      Object.keys(log).forEach(function (date) {
-        if (date >= since && date <= todayISO()) counts[catOf(ex)] += (log[date] || []).length;
-      });
-    });
-    var keys = CATEGORIES.map(function (c) { return c.key; });
-    if (counts[NONE]) keys.push(NONE);
-    var max = 0;
-    keys.forEach(function (k) { max = Math.max(max, counts[k]); });
-    if (!max) {
-      box.appendChild(el('p', 'empty-line', 'In den letzten 4 Wochen noch keine Sätze eingetragen.'));
-      return;
+  /* ================= View: Einstellungen ================= */
+
+  function renderSettings() {
+    var s = data.settings;
+
+    // Pausentimer
+    var rest = $('settings-rest');
+    rest.textContent = '';
+    rest.appendChild(el('p', 'field-label', 'Standard-Pause'));
+    rest.appendChild(chipRow(REST_OPTIONS.map(function (v) { return { v: v, label: formatSecs(v) }; }),
+      function (o) { return o.v === s.restDefault; },
+      function (o) {
+        s.restDefault = o.v;
+        saveData();
+        renderSettings();
+      }, 'chip-row chip-grid'));
+    var list = el('div', 'switch-list');
+    list.appendChild(switchRow('Nach jedem Satz automatisch starten', null, s.restAuto, function (on) { s.restAuto = on; saveData(); }));
+    list.appendChild(switchRow('Ton am Ende der Pause', 'Musik wird kurz leiser, nicht angehalten.', s.sound, function (on) {
+      s.sound = on;
+      saveData();
+      if (on) { Sound.unlock(); Sound.chime(); }
+    }));
+    if (navigator.vibrate) {
+      list.appendChild(switchRow('Vibration am Ende der Pause', null, s.vibrate, function (on) { s.vibrate = on; saveData(); }));
     }
-    keys.forEach(function (k) {
-      var row = el('div', 'cat-bar');
-      row.dataset.cat = k;
-      var label = el('span', 'cat-bar-label');
-      label.appendChild(el('span', 'chip-dot'));
-      label.appendChild(document.createTextNode(k === NONE ? 'Ohne' : catLabel(k)));
-      var track = el('span', 'cat-bar-track');
-      var fill = el('span', 'cat-bar-fill');
-      fill.style.width = (counts[k] / max * 100) + '%';
-      fill.style.display = 'block';
-      track.appendChild(fill);
-      row.appendChild(label);
-      row.appendChild(track);
-      row.appendChild(el('span', 'cat-bar-val', String(counts[k])));
-      row.setAttribute('aria-label', catLabel(k) + ': ' + counts[k] + ' Sätze');
-      box.appendChild(row);
+    if (WakeLock.supported) {
+      list.appendChild(switchRow('Bildschirm während der Pause anlassen', 'So siehst und hörst du das Ende zuverlässig.', s.wakeLock, function (on) {
+        s.wakeLock = on;
+        saveData();
+        WakeLock.update();
+      }));
+    }
+    if ('Notification' in window && 'serviceWorker' in navigator) {
+      var denied = Notification.permission === 'denied';
+      list.appendChild(switchRow('Benachrichtigung im Hintergrund',
+        denied ? 'Im Browser blockiert. In den Website-Einstellungen erlauben.' : 'Wenn die App gerade nicht offen ist. Klappt nicht auf jedem Gerät.',
+        s.notify && Notification.permission === 'granted', function (on, input) {
+          if (!on) { s.notify = false; saveData(); return; }
+          Notification.requestPermission().then(function (p) {
+            s.notify = p === 'granted';
+            saveData();
+            if (!s.notify) {
+              input.checked = false;
+              toast('Benachrichtigungen wurden nicht erlaubt.');
+            }
+          });
+        }));
+    }
+    rest.appendChild(list);
+
+    // Tagesziel
+    var goal = $('settings-goal');
+    goal.textContent = '';
+    var gRow = btn('setting-row');
+    gRow.appendChild(icon('target'));
+    var gText = el('span', 'setting-text');
+    gText.appendChild(el('span', null, 'Standard für neue Tage'));
+    gText.appendChild(el('small', null, s.goalDefault ? goalText(s.goalDefault) : 'Kein Standardziel'));
+    gRow.appendChild(gText);
+    gRow.appendChild(icon('chevron-right', 'chev'));
+    gRow.addEventListener('click', function () { openGoalSheet(null); });
+    goal.appendChild(gRow);
+    goal.appendChild(el('p', 'panel-sub', 'Einzelne Tage änderst du im Training über die Tageskarte.'));
+
+    // Kategorien
+    var cats = $('settings-cats');
+    cats.textContent = '';
+    var counts = categoryCounts();
+    var ul = el('ul', 'cat-list');
+    allCategories().forEach(function (c) {
+      var li = applyCat(el('li', 'cat-item'), c.key);
+      li.appendChild(el('span', 'chip-dot'));
+      var t = el('span', 'cat-item-text');
+      t.appendChild(el('span', null, c.label));
+      t.appendChild(el('small', null, plural(counts[c.key] || 0, 'Übung', 'Übungen') + (isBuiltin(c.key) ? ' · Standard' : '')));
+      li.appendChild(t);
+      if (!isBuiltin(c.key)) {
+        var edit = btn('icon-btn', null, 'pencil', c.label + ' bearbeiten');
+        edit.addEventListener('click', function () { openCategorySheet(c); });
+        li.appendChild(edit);
+      }
+      ul.appendChild(li);
     });
+    cats.appendChild(ul);
+    var add = btn('btn-secondary add-cat-btn', 'Kategorie hinzufügen', 'plus');
+    add.addEventListener('click', function () { openCategorySheet(null); });
+    cats.appendChild(add);
   }
 
   /* ================= Export / Import ================= */
 
   $('data-export').addEventListener('click', function () {
-    var backup = { exercises: data.exercises, logs: data.logs, photos: photos };
+    var backup = {
+      exercises: data.exercises, logs: data.logs, categories: data.categories,
+      goals: data.goals, settings: data.settings, photos: photos
+    };
     var blob = new Blob([JSON.stringify(backup, null, 2)], { type: 'application/json' });
     var a = document.createElement('a');
     a.href = URL.createObjectURL(blob);
@@ -1704,13 +3039,16 @@
       var parsed;
       try {
         parsed = JSON.parse(reader.result);
-        if (!parsed || !Array.isArray(parsed.exercises) || typeof parsed.logs !== 'object') throw new Error('bad format');
+        if (!isBackupShape(parsed)) throw new Error('bad format');
       } catch (e) {
         alert('Datei konnte nicht gelesen werden (kein gültiges Backup).');
         return;
       }
       if (!confirm('Backup laden? Die aktuellen Daten auf diesem Gerät werden ersetzt.')) return;
-      data = { exercises: parsed.exercises, logs: parsed.logs || {} };
+      var keepSettings = !parsed.settings;
+      var oldSettings = data.settings;
+      data = normalizeData(parsed);
+      if (keepSettings) data.settings = oldSettings;
       saveData();
 
       // Backup mit Fotos ersetzt alle Fotos. Ältere Backups ohne Fotos
@@ -1727,14 +3065,16 @@
       ui.openId = null;
       ui.draft = null;
       ui.editing = null;
+      if (ui.filter !== 'all' && ui.filter !== NONE && !isCategory(ui.filter)) ui.filter = 'all';
+      if (timer && !getExercise(timer.exId)) stopRest();
       render();
-      toast('Backup geladen: ' + data.exercises.length + ' Übungen');
+      toast('Backup geladen: ' + plural(data.exercises.length, 'Übung', 'Übungen'));
     };
     reader.readAsText(file);
   });
 
-  /* ================= Diagramm (Canvas) =================
-     Linie mit Fläche; Finger oder Maus über das Diagramm ziehen zeigt
+  /* ================= Diagramme (Canvas) =================
+     Linie oder Balken; Finger oder Maus über das Diagramm ziehen zeigt
      den jeweiligen Wert. Ohne Auswahl steht der letzte Wert im Hinweis. */
 
   function drawChart(canvas, points, opts) {
@@ -1754,6 +3094,7 @@
 
   function chartGeometry(canvas) {
     var c = canvas._chart;
+    var isBar = c.opts.type === 'bar';
     var cssW = canvas.clientWidth || canvas.parentNode.clientWidth || 300;
     var cssH = canvas.clientHeight || 220;
     var padL = 44, padR = 14, padT = 14, padB = 26;
@@ -1765,25 +3106,37 @@
       min = Math.min(min, c.opts.baseline);
       max = Math.max(max, c.opts.baseline);
     }
-    if (min === max) { min -= 1; max += 1; }
+    if (isBar) min = 0;
+    if (min === max) { if (isBar) max = max || 1; else { min -= 1; max += 1; } }
     var range = max - min;
-    var step = niceStep((range * 1.2) / 4);
-    min = Math.floor((min - range * 0.08) / step) * step;
-    max = Math.ceil((max + range * 0.08) / step) * step;
+    var step = niceStep((range * (isBar ? 1.05 : 1.2)) / 4);
+    min = isBar ? 0 : Math.floor((min - range * 0.08) / step) * step;
+    max = Math.ceil((max + (isBar ? 0 : range * 0.08)) / step) * step;
+    if (max <= min) max = min + step;
     var ticks = [];
     for (var v = min; v <= max + step / 2; v += step) ticks.push(v);
     var n = c.points.length;
     return {
       cssW: cssW, cssH: cssH, padL: padL, padR: padR, padT: padT, padB: padB, plotW: plotW, plotH: plotH,
       min: min, max: max, ticks: ticks, decimals: step % 1 === 0 ? 0 : (step * 10) % 1 === 0 ? 1 : 2,
-      x: function (i) { return n === 1 ? padL + plotW / 2 : padL + (i / (n - 1)) * plotW; },
-      y: function (v) { return padT + plotH - ((v - min) / (max - min)) * plotH; }
+      slot: n ? plotW / n : plotW,
+      x: function (i) {
+        if (isBar) return padL + (i + 0.5) * (plotW / Math.max(1, n));
+        return n === 1 ? padL + plotW / 2 : padL + (i / (n - 1)) * plotW;
+      },
+      y: function (val) { return padT + plotH - ((val - min) / (max - min)) * plotH; }
     };
+  }
+
+  function axisLabel(v, decimals) {
+    if (v >= 10000) return formatNum(v / 1000, v % 1000 === 0 ? 0 : 1) + 't';
+    return formatNum(v, decimals);
   }
 
   function paintChart(canvas) {
     var c = canvas._chart;
     var points = c.points;
+    var isBar = c.opts.type === 'bar';
     var dpr = window.devicePixelRatio || 1;
     var cssW = canvas.clientWidth || canvas.parentNode.clientWidth || 300;
     var cssH = canvas.clientHeight || 220;
@@ -1799,13 +3152,13 @@
     var css = getComputedStyle(document.documentElement);
     var cLine = css.getPropertyValue('--chart-line').trim() || '#72d88b';
     var cFill = css.getPropertyValue('--chart-fill').trim() || 'rgba(114,216,139,0.2)';
+    var cBar = css.getPropertyValue('--chart-bar').trim() || 'rgba(114,216,139,0.42)';
     var cGrid = css.getPropertyValue('--chart-grid').trim() || '#313935';
     var cText = css.getPropertyValue('--chart-text').trim() || '#919b96';
     var cSurface = css.getPropertyValue('--chart-surface').trim() || '#181d1b';
 
     var g = chartGeometry(canvas);
 
-    // Y-Gitter + Beschriftung
     ctx.font = '500 11px -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif';
     ctx.fillStyle = cText;
     ctx.strokeStyle = cGrid;
@@ -1818,10 +3171,9 @@
       ctx.stroke();
       ctx.textAlign = 'right';
       ctx.textBaseline = 'middle';
-      ctx.fillText(formatNum(v, g.decimals), g.padL - 8, y);
+      ctx.fillText(axisLabel(v, g.decimals), g.padL - 8, y);
     });
 
-    // Referenzlinie (100 %)
     if (c.opts.baseline !== undefined) {
       ctx.save();
       ctx.strokeStyle = cText;
@@ -1838,8 +3190,31 @@
     ctx.textBaseline = 'top';
     var step = Math.max(1, Math.ceil(points.length / 5));
     for (var i = 0; i < points.length; i += step) {
-      ctx.textAlign = points.length === 1 ? 'center' : i === 0 ? 'left' : 'center';
+      ctx.textAlign = isBar || points.length === 1 ? 'center' : i === 0 ? 'left' : 'center';
       ctx.fillText(formatISO(points[i].date), g.x(i), g.padT + g.plotH + 9);
+    }
+
+    if (isBar) {
+      var bw = Math.max(3, Math.min(28, g.slot * 0.62));
+      var base = g.y(0);
+      points.forEach(function (p, idx) {
+        if (!p.value) return;
+        var x = g.x(idx) - bw / 2;
+        var y = g.y(p.value);
+        var h = Math.max(2, base - y);
+        var r = Math.min(5, bw / 2, h);
+        ctx.beginPath();
+        ctx.moveTo(x, base);
+        ctx.lineTo(x, base - h + r);
+        ctx.quadraticCurveTo(x, base - h, x + r, base - h);
+        ctx.lineTo(x + bw - r, base - h);
+        ctx.quadraticCurveTo(x + bw, base - h, x + bw, base - h + r);
+        ctx.lineTo(x + bw, base);
+        ctx.closePath();
+        ctx.fillStyle = idx === c.active ? cLine : cBar;
+        ctx.fill();
+      });
+      return;
     }
 
     if (points.length > 1) {
@@ -1867,7 +3242,6 @@
       ctx.stroke();
     }
 
-    // Punkte
     var small = points.length > 40;
     points.forEach(function (p, idx) {
       ctx.beginPath();
@@ -1876,7 +3250,6 @@
       ctx.fill();
     });
 
-    // Auswahl: Hilfslinie + hervorgehobener Punkt
     if (c.active >= 0 && c.active < points.length) {
       var ax = g.x(c.active), ay = g.y(points[c.active].value);
       ctx.save();
@@ -1941,15 +3314,19 @@
   window.addEventListener('resize', function () {
     clearTimeout(resizeTimer);
     resizeTimer = setTimeout(function () {
-      if (ui.view === 'exerciseDetail' && $('detail-chart')._chart) paintChart($('detail-chart'));
-      else if (ui.view === 'stats' && $('stats-chart')._chart) paintChart($('stats-chart'));
+      ['detail-chart', 'stats-chart', 'stats-weekly'].forEach(function (id) {
+        var cv = $(id);
+        if (cv._chart && cv.offsetParent) paintChart(cv);
+      });
     }, 150);
   });
 
-  // Tageswechsel, während die App offen bleibt
+  // Tageswechsel, Timer und Wake Lock beim Zurückkehren in die App
   var knownToday = todayISO();
   document.addEventListener('visibilitychange', function () {
-    if (document.hidden) return;
+    if (document.hidden) { WakeLock.update(); return; }
+    updateDock();
+    WakeLock.update();
     var t = todayISO();
     if (t === knownToday) return;
     if (ui.date === knownToday) { ui.date = t; ui.draft = null; ui.editing = null; }
@@ -1957,8 +3334,18 @@
     render();
   });
 
+  /* ================= Offline (Service Worker) ================= */
+
+  if ('serviceWorker' in navigator && (location.protocol === 'https:' || location.hostname === 'localhost')) {
+    window.addEventListener('load', function () {
+      navigator.serviceWorker.register('sw.js').catch(noop);
+    });
+  }
+
   /* ================= Start ================= */
 
   applyView('training');
+  if (timer) { scheduleTimer(); WakeLock.update(); }
+  updateDock();
   loadPhotos().then(function () { if (Object.keys(photos).length) render(); });
 })();

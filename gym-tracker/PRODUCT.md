@@ -23,7 +23,7 @@ Powerful, focused, honest. Like a well-built piece of gym equipment: robust, cle
 ## Anti-references
 
 - Overloaded: walls of numbers, many buttons competing, dashboards that need reading.
-- Kitschy or playful: comic look, confetti, emoji as decoration, cartoon mascots.
+- Kitschy or playful: comic look, emoji as decoration, cartoon mascots. Confetti is reserved for real achievements only (a new weight record, a reached daily goal), as the owner explicitly asked for that moment of reward; never decoratively.
 - Cold or clinical: banking-app or hospital-app neutrality, grey-on-grey forms.
 - Typical gym-brand cliché: black with neon, aggressive bodybuilder styling.
 
@@ -32,7 +32,7 @@ Powerful, focused, honest. Like a well-built piece of gym equipment: robust, cle
 1. **Glanceable under load.** The primary number on any screen is readable at arm's length in one second. Hierarchy by size and weight, not by decoration.
 2. **Two taps to log.** The fastest path is always the default path: prefilled values, big targets, no confirmation for reversible actions.
 3. **Recognition over recall.** Photos, categories and consistent order help the user find the right exercise without reading names.
-4. **Progress tells the truth.** Show real numbers and honest trends; celebrate a personal best quietly, never with noise.
+4. **Progress tells the truth.** Show real numbers and honest trends. A new weight record earns one short, real celebration (confetti, sound, haptic); everything else stays quiet.
 5. **Nothing extra.** Every element has to earn its place on a 375px screen.
 
 ## Accessibility & Inclusion
